@@ -176,19 +176,19 @@ hermes gateway install
 
 What happens under the hood:
 
-1. `schtasks /Create /SC ONLOGON /RL LIMITED /TN Hermes_Gateway` — registers a task that runs at your login with standard (non-elevated) permissions. No UAC prompt.
+1. Registers an `ONLOGON` task named `Hermes_Gateway` that runs with the current user's standard permissions.
 2. If schtasks is blocked by group policy, falls back to writing a small `Hermes_Gateway.vbs` launcher (run hidden via `wscript.exe`) into `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`. Same effect, slightly cruder. A VBScript is used rather than a `cmd.exe` shortcut because a console allocated at logon can receive a close event that kills the gateway before it finishes starting.
-3. Spawns the gateway **detached via `pythonw.exe`** — not `python.exe`. `pythonw.exe` has no console attached, which immunizes it against `CTRL_C_EVENT` broadcasts from sibling processes (a real issue that used to kill the gateway when you Ctrl+C'd anything in the same process group).
+3. The Scheduled Task runs a hidden service VBS that waits for the Gateway and returns the same exit code. Task Scheduler therefore sees watchdog exit `75` and applies the registered restart-on-failure policy instead of recording an early launcher success.
 
-Flags used when spawning: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB`.
+When the Scheduled Task is installed, `hermes gateway start` and `restart` regenerate the launcher and start that Task. A direct detached spawn is used only when no Task owns the profile, including the Startup-folder fallback; that fallback provides login persistence but not Task Scheduler restart supervision.
 
 ### Manage
 
 ```powershell
 hermes gateway status      # Merged view: schtasks + Startup folder + running PID
-hermes gateway start       # Starts the gateway in the background (asks about login auto-start only on a TTY when nothing is installed)
+hermes gateway start       # Starts the registered Task, or a detached fallback when no Task is installed
 hermes gateway stop        # Writes the planned-stop marker, waits for the gateway to drain (≤ agent.restart_drain_timeout, capped at 30 s), then force-kills only if it is still alive
-hermes gateway restart     # Same drain-first stop, then a fresh start
+hermes gateway restart     # Same drain-first stop, then a supervised Task start when installed
 hermes gateway uninstall   # Removes schtasks entry, Startup shortcut, pid file
 ```
 

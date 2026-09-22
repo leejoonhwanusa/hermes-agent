@@ -1,8 +1,8 @@
 """Windows gateway service backend (Scheduled Task + Startup-folder fallback).
 
 Mirrors the ``launchd_*`` / ``systemd_*`` contract. ``schtasks /Create ... /RL LIMITED`` runs at the
-CURRENT USER's next logon without elevation. Manual starts and ``install --start-now`` use the direct
-hidden-console launcher instead of ``schtasks /Run`` so start/restart behavior is consistent.
+CURRENT USER's next logon without elevation. When that Task is installed, manual starts and
+``install --start-now`` use it too so its restart-on-failure policy owns the Gateway lifecycle.
 """
 
 from __future__ import annotations
@@ -422,7 +422,7 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
     lines = [
         f"' {_TASK_DESCRIPTION}",
         "Option Explicit",
-        "Dim sh, env, existing_pp",
+        "Dim sh, env, existing_pp, exit_code",
         'Set sh = CreateObject("WScript.Shell")',
         'Set env = sh.Environment("PROCESS")',
         f"env.Item({q('HERMES_HOME')}) = {q(hermes_home)}",
@@ -436,8 +436,10 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
         f"  env.Item({q('PYTHONPATH')}) = {q(static_pythonpath)}",
         "End If",
         f"sh.CurrentDirectory = {q(working_dir)}",
-        # Window style 0 = hidden; bWaitOnReturn False = detached/async.
-        f"sh.Run {q(command_line)}, 0, False",
+        # Window style 0 = hidden. Wait for the child and return its status so Task Scheduler's
+        # RestartOnFailure policy can observe watchdog exit 75 instead of a launcher success.
+        f"exit_code = sh.Run({q(command_line)}, 0, True)",
+        "WScript.Quit exit_code",
     ]
     return "\r\n".join(lines) + "\r\n"
 
@@ -809,6 +811,16 @@ def _start_or_report_running(running_pids: list[int] | None = None) -> None:
         _report_gateway_start(f"direct spawn (PID {pid})")
 
 
+def _start_registered_task(task_name: str) -> None:
+    """Regenerate the launcher and start the Task that owns restart-on-failure supervision."""
+    _write_task_script()
+    code, out, err = _exec_schtasks(["/Run", "/TN", task_name])
+    if code != 0:
+        detail = (err or out or "unknown schtasks error").strip()
+        raise RuntimeError(f"schtasks /Run failed (code {code}): {detail}")
+    _report_gateway_start(f"Scheduled Task {task_name!r}")
+
+
 def _install_startup_fallback(script_path: Path, start_now: bool, detail: str) -> None:
     """Install the Startup-folder fallback and optionally start once."""
     print(f"↻ Scheduled Task install blocked ({detail.splitlines()[0]}) — using Startup folder fallback")
@@ -900,7 +912,7 @@ def install(
         print(f"  Task script: {script_path}")
         print("ℹ Gateway auto-start installed for Windows login.")
         if start_now:
-            _start_or_report_running()
+            _start_registered_task(task_name)
         else:
             print("ℹ Gateway not started now.")
             print("  Start manually with: hermes gateway start")
@@ -1575,7 +1587,7 @@ def status(deep: bool = False) -> None:
 
 
 def start() -> None:
-    """Start the gateway using the canonical detached Windows launch path."""
+    """Start through the registered Task when present, else use the detached fallback path."""
     _assert_windows()
     _print_start_attestation_warning()   # once: the LAST start's ✓ turned out to be false
     running_pids = _gateway_pids()
@@ -1605,10 +1617,13 @@ def start() -> None:
             return
         print("ℹ Login auto-start not installed; add it later with: hermes gateway install")
     elif is_task_registered():
-        reconcile_scheduled_task(get_task_name())   # like systemd's regenerate-on-stale before a start
+        task_name = get_task_name()
+        reconcile_scheduled_task(task_name)   # like systemd's regenerate-on-stale before a start
+        _start_registered_task(task_name)
+        return
 
-    # Manual starts use the same console-less direct spawn as restart() and install --start-now;
-    # Scheduled Task / Startup entries are only login persistence.
+    # No Scheduled Task owns this profile: use the console-less direct spawn for an uninstalled
+    # gateway or the Startup-folder fallback, neither of which has Task restart supervision.
     pid = _spawn_detached()
     _report_gateway_start(f"direct spawn (PID {pid})")
 

@@ -3,6 +3,7 @@
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -370,7 +371,7 @@ def test_install_scheduled_task_recreates_instead_of_change(monkeypatch, tmp_pat
 
 
 def test_gateway_vbs_script_is_console_less(monkeypatch):
-    """The .vbs launcher must avoid cmd.exe entirely and Run pythonw hidden
+    """The .vbs launcher must avoid cmd.exe entirely and Run Python hidden
     (issue #45599 fix A: no console -> no logon CTRL_CLOSE_EVENT / 0xC000013A)."""
     monkeypatch.setattr(
         gateway_windows,
@@ -388,11 +389,46 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
     assert "pythonw.exe" in content
     assert "hermes_cli.main" in content
     assert "gateway run" in content
-    assert ", 0, False" in content  # hidden window, detached/async
     for var in ("HERMES_HOME", "PYTHONIOENCODING", "HERMES_GATEWAY_DETACHED", "VIRTUAL_ENV", "PYTHONPATH"):
         assert var in content
     assert "--profile" in content and "work" in content
     assert content.endswith("\r\n")
+
+
+@pytest.mark.windows_only
+def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_path):
+    """A missing wait/exit-code handoff makes Task Scheduler record success before the Gateway
+    exits, so RestartOnFailure never observes watchdog exit 75."""
+    monkeypatch.setattr(
+        gateway_windows,
+        "_resolve_detached_python",
+        lambda exe: (sys.executable, Path(sys.prefix), []),
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_gateway_run_argv",
+        lambda exe, profile: [sys.executable, "-c", "raise SystemExit(75)"],
+    )
+    launcher = tmp_path / "gateway.vbs"
+    launcher.write_text(
+        gateway_windows._build_gateway_vbs_script(
+            sys.executable,
+            str(tmp_path),
+            str(tmp_path / "home"),
+            "",
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+
+    result = subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "cscript.exe"), "//B", "//NoLogo", str(launcher)],
+        check=False,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 75
 
 
 def test_atomic_write_leaves_no_staging_file_when_swap_fails(monkeypatch, tmp_path):
@@ -638,6 +674,53 @@ def _arrange_uninstalled_start(monkeypatch):
     monkeypatch.setattr(gateway_windows, "_report_gateway_start", lambda via: None)
     monkeypatch.setattr(gateway_windows, "_stdin_console_mode_ok", lambda: True)
     return installs, spawns
+
+
+def test_start_uses_registered_task_for_supervised_gateway(monkeypatch, tmp_path):
+    """A registered Task must own the launched Gateway; a direct spawn cannot propagate a later
+    watchdog exit to Task Scheduler's RestartOnFailure policy."""
+    calls = []
+    script = tmp_path / "Hermes_Gateway.cmd"
+    monkeypatch.setattr(gateway_windows, "_assert_windows", lambda: None)
+    monkeypatch.setattr(gateway_windows, "_print_start_attestation_warning", lambda: None)
+    monkeypatch.setattr(gateway_windows, "_gateway_pids", lambda: [])
+    monkeypatch.setattr(gateway_windows, "is_task_registered", lambda: True)
+    monkeypatch.setattr(gateway_windows, "is_startup_entry_installed", lambda: False)
+    monkeypatch.setattr(gateway_windows, "get_task_name", lambda: "Hermes_Gateway")
+    monkeypatch.setattr(
+        gateway_windows,
+        "reconcile_scheduled_task",
+        lambda name: calls.append(("reconcile", name)) or False,
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_write_task_script",
+        lambda: calls.append(("write",)) or script,
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_exec_schtasks",
+        lambda args: calls.append(("schtasks", tuple(args))) or (0, "SUCCESS", ""),
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_report_gateway_start",
+        lambda via: calls.append(("report", via)),
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_spawn_detached",
+        lambda: pytest.fail("registered Task must not fall back to an unsupervised direct spawn"),
+    )
+
+    gateway_windows.start()
+
+    assert calls == [
+        ("reconcile", "Hermes_Gateway"),
+        ("write",),
+        ("schtasks", ("/Run", "/TN", "Hermes_Gateway")),
+        ("report", "Scheduled Task 'Hermes_Gateway'"),
+    ]
 
 
 def test_stdin_interactive_only_when_isatty_and_a_console_answers_get_console_mode():
