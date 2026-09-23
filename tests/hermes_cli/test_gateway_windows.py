@@ -361,7 +361,9 @@ def test_install_scheduled_task_recreates_instead_of_change(monkeypatch, tmp_pat
     assert "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" in xml_seen["text"]
     assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in xml_seen["text"]
     assert "<RestartOnFailure>" in xml_seen["text"]
-    assert "<Count>999</Count>" in xml_seen["text"]
+    restart_block = xml_seen["text"].split("<RestartOnFailure>", 1)[1].split("</RestartOnFailure>", 1)[0]
+    restart_count = int(restart_block.split("<Count>", 1)[1].split("</Count>", 1)[0])
+    assert 1 <= restart_count <= 255
     # Scheduled Task launches the console-less .vbs via wscript.exe, never cmd.exe
     # (issue #45599 fix A: no console -> no logon CTRL_CLOSE_EVENT / 0xC000013A).
     assert "<Command>wscript.exe</Command>" in xml_seen["text"]

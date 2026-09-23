@@ -56,7 +56,9 @@ _TASK_NAME_DEFAULT = "Hermes_Gateway"
 _TASK_DESCRIPTION = "Hermes Agent Gateway - Messaging Platform Integration"
 _TASK_LOGON_DELAY = "PT30S"
 _TASK_RESTART_INTERVAL = "PT1M"
-_TASK_RESTART_COUNT = 999
+# Task Scheduler XML defines RestartOnFailure/Count as unsignedByte (1..255).
+# Use the maximum schema-valid retry count so watchdog exit 75 remains a reliable supervisor signal.
+_TASK_RESTART_COUNT = 255
 
 _GATEWAY_ENV = (("PYTHONIOENCODING", "utf-8"), ("HERMES_GATEWAY_DETACHED", "1"), ("HERMES_SUPERVISED_CHILD", "1"))
 
