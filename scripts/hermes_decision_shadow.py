@@ -167,7 +167,7 @@ def _validate_response(response: Any, bound: dict[str, Any]) -> DecisionResult:
     if choice.finish_reason != "stop":
         raise _Abstain("truncated_response")
     message = choice.message
-    if message.tool_calls or message.function_call or message.refusal:
+    if message.role != "assistant" or message.tool_calls or message.function_call or message.refusal:
         raise _Abstain("malformed_response")
     text = message.content
     if not isinstance(text, str) or not text.strip():

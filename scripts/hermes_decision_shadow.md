@@ -2,7 +2,7 @@
 
 상태: **수동 one-shot CLI source 구현. 기본 비활성. 실제 Qwen inference, 운영 설치·채택, 자연 실행 및 외부 성과는 미검증.**
 
-구현은 [hermes_decision_shadow.py](hermes_decision_shadow.py), native 계약 검증은 [test_hermes_decision_shadow.py](../tests/scripts/test_hermes_decision_shadow.py)에 있다. 상위 설계는 Ops-Hub의 `docs/ADR/0004-openjev-local-decision-boundaries.md` v3이다.
+구현은 [hermes_decision_shadow.py](hermes_decision_shadow.py), native 계약 검증은 [test_hermes_decision_shadow.py](../tests/scripts/test_hermes_decision_shadow.py)에 있다. 상위 설계는 Ops-Hub의 `docs/ADR/0004-openjev-local-decision-boundaries.md` v4이다.
 
 ## 소유권과 비개입
 
@@ -63,7 +63,7 @@ Get-Content -Raw -Encoding utf8 .\shadow-request.json |
 
 정규화된 redacted evidence와 project/target/source/task/candidates/policy를 SHA-256 `request_id`에 결속한다. 이것은 **내용 결속 digest**이지 signature, 독립 source attestation, execution/attempt ID, 실제 Git HEAD 확인 또는 성공 증거가 아니다.
 
-Qwen 응답은 `request_id`, `decision_kind`, `policy_revision`, `allowed_candidates`를 정확히 echo하고 `recommendation`과 optional `raw_score`만 추가해야 한다. 단일 choice, `finish_reason=stop`, 동일한 model, 비어 있지 않은 최대 2,000 문자 JSON만 받는다. duplicate keys, 비유한 수·boolean score, tool/function calls, refusal, 미지정 필드, binding 불일치를 거부한다. `raw_score`는 보정되지 않은 수치일 뿐 성공 확률이 아니며, 보류 결과에는 점수를 남기지 않는다. model의 자유 서술 이유는 출력하지 않는다.
+Qwen 응답은 `request_id`, `decision_kind`, `policy_revision`, `allowed_candidates`를 정확히 echo하고 `recommendation`과 optional `raw_score`만 추가해야 한다. 단일 choice, `finish_reason=stop`, 동일한 model, `message.role=assistant`, 비어 있지 않은 최대 2,000 문자 JSON만 받는다. duplicate keys, 비유한 수·boolean score, tool/function calls, refusal, 미지정 필드, binding 불일치를 거부한다. `raw_score`는 보정되지 않은 수치일 뿐 성공 확률이 아니며, 보류 결과에는 점수를 남기지 않는다. model의 자유 서술 이유는 출력하지 않는다.
 
 ## Qwen 경로·실패 처리
 
@@ -84,8 +84,24 @@ scripts/run_tests.sh tests/scripts/test_hermes_decision_shadow.py -j 1 --file-re
 scripts/run_tests.sh tests/agent/test_context_engine_select_context.py tests/tools/test_delegate_capability_inheritance.py tests/tools/test_delegate_child_cache_ttl.py -j 2 --file-retries 0
 ```
 
-신규 25개 native 사례는 실제 config loader, Auxiliary resolver 및 SDK를 import하고 HTTP transport만 fake 처리한다. disabled/no-stdin, YES/NO/ABSTAIN, timeout, deadline cancellation 종료, provider failure/no-retry, redirect 거부, malformed/empty/unknown/mismatch/truncation, 기존 redaction, 실제 CLI entrypoint DEBUG privacy, multiplex profile A→B→A 및 config/input 보존을 확인한다. 기존 context/cache/delegation 14개는 별도 회귀 경계다.
+현재 26개 native 사례는 실제 config loader, Auxiliary resolver 및 SDK를 import하고 HTTP transport만 fake 처리한다. disabled/no-stdin, YES/NO/ABSTAIN, timeout, deadline cancellation 종료, provider failure/no-retry, redirect 거부, malformed/empty/unknown/mismatch/truncation, 기존 redaction, 실제 CLI entrypoint DEBUG privacy, multiplex profile A→B→A 및 config/input 보존을 확인한다. 기존 context/cache/delegation 14개는 별도 회귀 경계다. 2026-09-25 후속 검증에서 이 40개가 재시도 없이 통과했고, scoped Ruff와 compileall도 exit 0이었다.
+
+후속 점검에서 실제 SDK 경로가 `message.role=user`인 잘못된 envelope를 `YES/recommended`로 수용하는 결함을 기존 native 파일의 한 회귀 사례로 재현했다. `_validate_response()`의 기존 malformed guard에 assistant role 조건만 추가하여 `ABSTAIN/malformed_response`로 보류한다. 이 조건은 응답 형식 검사이지 실제 모델 identity나 출처의 인증이 아니다. endpoint, 정책 revision, 호출 수, timeout, fallback 및 실행 연결은 바꾸지 않았다.
 
 최초 정상 사례는 짧은 2초 테스트 설정에서 한 번 ABSTAIN이었고 단독 재실행은 통과했다. 원인은 확정하지 않았으며 일반 계약 사례는 10초 설정으로 변경하고 별도 2초 deadline 사례로 취소·종료를 검증했다. 이 변경을 실제 Qwen latency 또는 cold-start 적합성의 증거로 사용하지 않는다.
 
 실제 Qwen inference, 실익·정확도·calibration, runtime adoption, 자연 실행, 외부 결과는 **NOT VERIFIED**이다. 다음 설계 방향은 기존 Auxiliary/Qwen 경로에서의 제한된 Adaptive RAG이지만, 승인된 로컬 실제 inference 및 Shadow 실익·경합·보류율 관측을 먼저 통과해야 한다. 그 전에는 routing/RAG/verification 권한을 활성화하지 않는다.
+
+## 남은 설계 단계와 종료 조건
+
+현재 source/native 완료를 전체 JEV 완료로 표현하지 않는다. 2026-09-25 Gateway metadata 조회에서 health/models/props는 HTTP 200, alias는 `qwen-hermes`, slot은 1이었지만 `authority=runtime_self_report`, `inference=false`다. 이는 OJ-2의 생성 성공이나 OJ-3의 실익 증거를 대체하지 않는다.
+
+| 단계 | 이어서 확인할 기존 설계의 요구사항 | 현재 상태 |
+| --- | --- | --- |
+| OJ-2 backend 적합성 | 승인된 로컬 운영 경로에서 실제 요청/결과를 source·policy·model/template·총시간에 결속하고, JSON 적합성·보류·timeout을 관측 | 실제 생성 미실행. Gateway 실행 경계에서 차단됨 |
+| OJ-3 Shadow 관측 | 기존 작업은 한 번만 실행하고 추천과 실제 경로·기존 receipt를 분리하여 실익·보류율·자원 경합을 관측. CLI에는 자동 outcome 수집기가 없음 | 미관측. OJ-2와 운영 관측 증거 필요 |
+| OJ-4 이후 | 검증된 개선이 있는 범위에서만 Adaptive RAG, 이어서 허용된 routing/retry, 충분한 실제 데이터 이후 optimization | 선행 조건 미충족, 미활성 |
+
+현재 대화의 작업 요청을 이유로 Gateway 안에서 이 CLI를 실제 생성 모드로 실행하거나, 별도 AI/SSH/HTTP 경로를 연결하거나, 미검증인 OJ-2/OJ-3를 완료로 바꾸지 않는다. 승인된 로컬 운영 실행에서도 baseline/evidence의 exact source는 호출자가 확인해야 한다. 평가 기준은 측정 전에 고정하고, recommendation만으로 성공 label을 만들거나 비교를 위해 외부 mutation을 중복 실행하지 않는다.
+
+이번 변경은 수동 CLI의 응답 검증과 문서뿐이다. 운영 config·설치본·자동 hook을 변경하지 않았고, 이 수정 적용을 위해 상주 Hermes Control/Qwen/Gateway를 재시작할 필요도 없다.

@@ -36,6 +36,7 @@ from hermes_constants import reset_hermes_home_override, set_hermes_home_overrid
         ("score", "malformed_response", "ABSTAIN"),
         ("truncated", "truncated_response", "ABSTAIN"),
         ("tools", "malformed_response", "ABSTAIN"),
+        ("wrong_role", "malformed_response", "ABSTAIN"),
         ("unsupported", "unsupported_task", "ABSTAIN"),
         ("oversize", "invalid_request", "ABSTAIN"),
         ("rule", "rule_sufficient", "ABSTAIN"),
@@ -128,6 +129,8 @@ def test_shadow_contract_never_applies_or_retries(tmp_path, monkeypatch, caplog,
         if case == "duplicate":
             content = content[:-1] + ', "recommendation": "NO"}'
         message = {"role": "assistant", "content": content}
+        if case == "wrong_role":
+            message["role"] = "user"
         if case == "tools":
             message["tool_calls"] = [{"id": "x", "type": "function", "function": {"name": "deploy", "arguments": "{}"}}]
         return httpx.Response(200, json={
