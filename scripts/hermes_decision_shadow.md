@@ -2,7 +2,7 @@
 
 상태: **수동 one-shot CLI source 구현. 기본 비활성. 실제 Qwen inference, 운영 설치·채택, 자연 실행 및 외부 성과는 미검증.**
 
-구현은 [hermes_decision_shadow.py](hermes_decision_shadow.py), native 계약 검증은 [test_hermes_decision_shadow.py](../tests/scripts/test_hermes_decision_shadow.py)에 있다. 상위 설계는 Ops-Hub의 `docs/ADR/0004-openjev-local-decision-boundaries.md` v4이다.
+구현은 [hermes_decision_shadow.py](hermes_decision_shadow.py), native 계약 검증은 [test_hermes_decision_shadow.py](../tests/scripts/test_hermes_decision_shadow.py)에 있다. 상위 설계는 Ops-Hub의 `docs/ADR/0004-openjev-local-decision-boundaries.md` v5이다. v5는 추가 관측 기록이며 v4의 설계·정책·실행 권한을 변경하지 않는다.
 
 ## 소유권과 비개입
 
@@ -92,9 +92,19 @@ scripts/run_tests.sh tests/agent/test_context_engine_select_context.py tests/too
 
 실제 Qwen inference, 실익·정확도·calibration, runtime adoption, 자연 실행, 외부 결과는 **NOT VERIFIED**이다. 다음 설계 방향은 기존 Auxiliary/Qwen 경로에서의 제한된 Adaptive RAG이지만, 승인된 로컬 실제 inference 및 Shadow 실익·경합·보류율 관측을 먼저 통과해야 한다. 그 전에는 routing/RAG/verification 권한을 활성화하지 않는다.
 
+## 2026-09-25 Gateway 재확인
+
+이번 실행 주체는 HANILSERVER의 Web GPT/Hanil MCP Gateway이며 로컬 에이전트 채널이 아니다. 시작 revision `f05b8e4767f10b16ff1fc7061716dde77c2bc8f8`, branch `codex/fix-windows-gateway-supervision`, tracking `runtime-fork`의 clean checkout을 확인했다. CLI SHA-256은 `eff817f258741d8b88290fd13c253a09a744f1fa0369688de54e90d0afd5b3a1`로 v4 수정본과 같다. 새 결함을 확인하지 않아 **NO_PRODUCTION_DELTA**이며 source·테스트·운영 config는 변경하지 않았다.
+
+기존 runner에 위 4개 native 파일을 함께 지정하고 `-j 2 --file-retries 0`으로 실행했다. 21:25:21–21:25:57 KST, job `6b5835fd-9622-476c-bee1-055b24d81d44`: **40 passed, 0 failed**, exit 0, runner wall 33.3초, Gateway job wall 35.80초. 실제 interpreter는 checkout `.venv\Scripts\python.exe`의 Python `3.12.14`; `openai 2.24.0`, `httpx 0.28.1`, `pytest 9.0.2`였다. 과거 role 결함을 새로 수정한 것이 아니며, 이 시간은 실제 Qwen latency가 아니다.
+
+읽기 전용 기존 resolver 조회에서 Gateway 하위 프로세스의 home은 `C:\Users\HANILSERVER\AppData\Local\hermes`, Shadow task 설정은 없고 enable false였으며 config bytes는 보존됐다. 실행 중인 다른 profile까지 확인한 것은 아니다. 고정 설치 root `C:\Users\HANILSERVER\AppData\Local\hermes\hermes-agent` 아래에는 두 Shadow 파일 `.py`/`.md`가 없었다. 따라서 승인된 로컬 검증에서도 설치본을 사용했다고 가정하지 말고 **현재 checkout의 이 entrypoint와 interpreter**를 명시해야 한다. loaded process source는 미관측이다.
+
+실제 생성 요청은 **0회**이며 임시 enable·설치·deploy·restart는 없었다. 사후 Shadow replay와 자연 실행도 관측하지 않았다. 전체 tracked Python 검색은 time limit으로 미완료이므로 전 저장소 consumer 부재의 추가 증명으로 사용하지 않는다. 세부 source/native/config/runtime 식별자와 OJ 판정은 ADR 0004의 15절에 보관한다.
+
 ## 남은 설계 단계와 종료 조건
 
-현재 source/native 완료를 전체 JEV 완료로 표현하지 않는다. 2026-09-25 Gateway metadata 조회에서 health/models/props는 HTTP 200, alias는 `qwen-hermes`, slot은 1이었지만 `authority=runtime_self_report`, `inference=false`다. 이는 OJ-2의 생성 성공이나 OJ-3의 실익 증거를 대체하지 않는다.
+현재 source/native 완료를 전체 JEV 완료로 표현하지 않는다. 이번 2026-09-25 Gateway metadata 재조회에서 health/models/props는 HTTP 200, alias `qwen-hermes`, ftype `Q4_K - Medium`, total slots 1, build `b10666-4e97ac86e`였지만 `authority=runtime_self_report`, `inference=false`다. 실제 model 파일·template·slot 점유는 확인되지 않았고 OJ-2의 생성 성공이나 OJ-3의 실익 증거를 대체하지 않는다.
 
 | 단계 | 이어서 확인할 기존 설계의 요구사항 | 현재 상태 |
 | --- | --- | --- |
@@ -104,4 +114,4 @@ scripts/run_tests.sh tests/agent/test_context_engine_select_context.py tests/too
 
 현재 대화의 작업 요청을 이유로 Gateway 안에서 이 CLI를 실제 생성 모드로 실행하거나, 별도 AI/SSH/HTTP 경로를 연결하거나, 미검증인 OJ-2/OJ-3를 완료로 바꾸지 않는다. 승인된 로컬 운영 실행에서도 baseline/evidence의 exact source는 호출자가 확인해야 한다. 평가 기준은 측정 전에 고정하고, recommendation만으로 성공 label을 만들거나 비교를 위해 외부 mutation을 중복 실행하지 않는다.
 
-이번 변경은 수동 CLI의 응답 검증과 문서뿐이다. 운영 config·설치본·자동 hook을 변경하지 않았고, 이 수정 적용을 위해 상주 Hermes Control/Qwen/Gateway를 재시작할 필요도 없다.
+v4 변경은 수동 CLI의 응답 검증과 문서뿐이었고, 이번 v5 변경은 문서의 추가 관측 기록뿐이다. 운영 config·설치본·자동 hook을 변경하지 않았고, 이 문서 변경 때문에 상주 Hermes Control/Qwen/Gateway를 재시작하지 않는다.
