@@ -1,0 +1,38 @@
+schema_version: 1
+project_id: hermes-agent
+risk_class: high
+safety:
+  default_mode: read_only
+  external_network: deny_unless_declared
+  commerce_mutation: deny
+  database_mutation: deny
+  trade_mutation: deny
+evidence:
+  source_commit: required
+  runtime_identity: required
+  artifact_digest: required
+  required_kinds_by_driver:
+    process: [stdout]
+    manual: [manual_log]
+metadata:
+  scope: Installed Hermes Agent source checkout on HANILSERVER; no service mutation from QA profiles.
+  test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
+approved_profiles:
+  gateway_recovery_regression:
+    description: Canonical isolated test runner for affected Windows Gateway, Telegram, source completion, PM currency, and branch preservation checks; excludes the elevated live Task creation test.
+    interpreter: C:/Program Files/Git/usr/bin/bash.exe
+    command_argv:
+      - -c
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-d925a28037fe4735afb1546a4fb55fd6/venv/Scripts/python.exe exec scripts/run_tests.sh tests/hermes_cli/test_gateway_windows.py tests/gateway/test_telegram_network.py tests/hermes_cli/test_update_launch_completion.py tests/hermes_cli/test_venv_sync_currency.py tests/hermes_cli/test_update_parked_branch_guard.py -k 'not test_exec_schtasks_round_trips_non_ascii_task_argument_live'"
+    working_directory: .
+    timeout_seconds: 1800
+    execution_authority: read_only
+    driver: process
+  gateway_recovery_ruff:
+    description: Scoped Ruff for the recovery source and existing affected tests.
+    interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-d925a28037fe4735afb1546a4fb55fd6/venv/Scripts/ruff.exe
+    command_argv: [check, hermes_cli/gateway_windows.py, plugins/platforms/telegram/adapter.py, plugins/platforms/telegram/telegram_network.py, hermes_cli/source_completion.py, hermes_cli/venv_sync.py, tests/hermes_cli/test_gateway_windows.py, tests/gateway/test_telegram_network.py, tests/hermes_cli/test_update_launch_completion.py, tests/hermes_cli/test_venv_sync_currency.py]
+    working_directory: .
+    timeout_seconds: 300
+    execution_authority: read_only
+    driver: process

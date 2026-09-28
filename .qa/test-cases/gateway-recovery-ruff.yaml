@@ -1,0 +1,26 @@
+test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF
+project_id: hermes-agent
+title: Installed Agent Gateway recovery scoped Ruff
+purpose: Check the affected Python source and existing tests without live service actions.
+preconditions:
+  - Use the registered contract and its pinned existing PM test generation.
+steps:
+  - Run gateway_recovery_ruff through the registered process profile.
+expected_results:
+  - Scoped Ruff exits successfully with source-bound stdout Evidence.
+requirement_refs: [AGENTS.md, .qa/contract.yaml]
+risk: high
+tags: [regression, static, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 1
+created_at: '2026-09-28T10:32:41+00:00'
+updated_at: '2026-09-28T10:32:41+00:00'
+automation_bindings:
+  - binding_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF-PROFILE
+    test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF
+    project_id: hermes-agent
+    driver: process
+    profile_name: gateway_recovery_ruff
+    timeout_seconds: 300

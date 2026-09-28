@@ -1,0 +1,21 @@
+test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REVIEW
+project_id: hermes-agent
+title: Independent review of installed Agent Gateway recovery
+purpose: Review the recovery source, affected checks, and dated operating evidence; distinguish them from natural watchdog and external-message proof.
+preconditions:
+  - Freeze a source-bound subject and independent_code_review plan before dispatch.
+  - Use a real fresh read-only named qa agent with observed gpt-6-astra/high provenance, separate from the implementer.
+steps:
+  - Review the exact committed diff and central regression Evidence.
+  - Submit the unmodified ReviewObservation through the existing manual adapter.
+expected_results:
+  - The observation is attributable to the current Run/item/source and records findings and limits accurately.
+requirement_refs: [AGENTS.md, .qa/contract.yaml, C:/Project/Hanil-QA/AGENTS.md]
+risk: high
+tags: [independent_code_review, gateway, lifecycle, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 1
+created_at: '2026-09-28T10:32:41+00:00'
+updated_at: '2026-09-28T10:32:41+00:00'
