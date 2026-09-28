@@ -1,7 +1,7 @@
 test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION
 project_id: hermes-agent
-title: Installed Agent Gateway recovery source regression
-purpose: Verify the selected source behavior without modifying the live Scheduled Task or Gateway.
+title: Installed Agent Gateway watchdog lifecycle regression
+purpose: Verify Gateway loop liveness and shutdown watchdog behavior through the pinned source test runner without modifying the live Scheduled Task or Gateway.
 preconditions:
   - Use the registered contract and its pinned existing PM test generation.
   - Keep the unrelated untracked web build folder intact.
@@ -15,9 +15,9 @@ tags: [regression, gateway, windows, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 1
+revision: 2
 created_at: '2026-09-28T10:32:41+00:00'
-updated_at: '2026-09-28T10:32:41+00:00'
+updated_at: '2026-09-28T23:16:39+00:00'
 automation_bindings:
   - binding_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION-PROFILE
     test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION

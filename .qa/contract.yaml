@@ -19,19 +19,19 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Canonical isolated test runner for affected Windows Gateway, Telegram, source completion, PM currency, and branch preservation checks; excludes the elevated live Task creation test.
+    description: Canonical isolated regression for Gateway loop liveness and shutdown watchdog behavior.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec scripts/run_tests.sh tests/hermes_cli/test_gateway_windows.py tests/gateway/test_telegram_network.py tests/hermes_cli/test_update_launch_completion.py tests/hermes_cli/test_venv_sync_currency.py tests/hermes_cli/test_update_parked_branch_guard.py -k 'not test_exec_schtasks_round_trips_non_ascii_task_argument_live'"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec scripts/run_tests.sh tests/gateway/test_loop_liveness_watchdog.py tests/gateway/test_shutdown_watchdog.py"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for the recovery source and existing affected tests.
+    description: Scoped Ruff for the shutdown watchdog source and its two affected Gateway tests.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
-    command_argv: [check, hermes_cli/update_cmd.py, hermes_cli/update_cmd_git.py, tests/hermes_cli/test_update_parked_branch_guard.py, hermes_cli/gateway_windows.py, plugins/platforms/telegram/adapter.py, plugins/platforms/telegram/telegram_network.py, hermes_cli/source_completion.py, hermes_cli/venv_sync.py, tests/hermes_cli/test_gateway_windows.py, tests/gateway/test_telegram_network.py, tests/hermes_cli/test_update_launch_completion.py, tests/hermes_cli/test_venv_sync_currency.py]
+    command_argv: [check, gateway/shutdown_watchdog.py, tests/gateway/test_loop_liveness_watchdog.py, tests/gateway/test_shutdown_watchdog.py]
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

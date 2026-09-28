@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import threading
 import time
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from gateway.shutdown_watchdog import (
     loop_heartbeat_forever,
@@ -41,7 +44,9 @@ def test_loop_liveness_watchdog_stop_during_dump_disarms_hard_exit():
 
     assert not handle.is_alive()
     critical.assert_called_once()
-    dump.assert_called_once_with(all_threads=True)
+    assert dump.call_args_list[0].kwargs["all_threads"] is True
+    assert "file" in dump.call_args_list[0].kwargs
+    dump.assert_any_call(all_threads=True)
     assert exit_codes == []
 
 def test_loop_liveness_watchdog_stop_during_final_miss_disarms_hard_exit():
@@ -257,10 +262,21 @@ def test_load_gateway_config_bridges_loop_watchdog_keys(tmp_path, monkeypatch):
     assert cfg.loop_watchdog_probe_timeout_s == 15.0
     assert cfg.loop_watchdog_max_strikes == 12
 
-def test_loop_liveness_watchdog_marks_runtime_degraded_before_restart():
-    """The terminal watchdog observation must be visible before ``os._exit``."""
+@pytest.mark.parametrize("disk_available", [True, False])
+def test_loop_liveness_watchdog_marks_runtime_degraded_before_restart(
+    monkeypatch, disk_available,
+):
+    """Preserve the real stack without stderr; disk failure must still restart."""
+    from gateway.shutdown_watchdog import _process_hermes_home
     from gateway.status import read_runtime_status, write_runtime_status
 
+    monkeypatch.setattr("gateway.shutdown_watchdog.sys.stderr", None)
+    dump_path = _process_hermes_home() / "logs" / "gateway-loop-liveness-watchdog.log"
+    dump_path.parent.mkdir(parents=True, exist_ok=True)
+    if disk_available:
+        dump_path.write_text("previous incident", encoding="utf-8")
+    else:
+        dump_path.mkdir()  # Opening a directory as a file fails on every host.
     write_runtime_status(gateway_state="running", exit_reason=None)
     loop = MagicMock(spec=asyncio.AbstractEventLoop)
     fired = threading.Event()
@@ -271,8 +287,7 @@ def test_loop_liveness_watchdog_marks_runtime_degraded_before_restart():
         fired.set()
 
     with (
-        patch("gateway.shutdown_watchdog.faulthandler.dump_traceback"),
-        patch("gateway.shutdown_watchdog.os._exit", side_effect=fake_exit),
+        patch("gateway.shutdown_watchdog._hard_exit", side_effect=fake_exit),
     ):
         handle = start_loop_liveness_watchdog(
             loop, probe_interval=0.01, probe_timeout=0.01, max_strikes=2
@@ -287,6 +302,16 @@ def test_loop_liveness_watchdog_marks_runtime_degraded_before_restart():
     assert record["gateway_state"] == "degraded"
     assert record["exit_reason"] == "loop_liveness_watchdog"
     assert record["restart_requested"] is True
+    if disk_available:
+        dump = dump_path.read_text(encoding="utf-8")
+        header = json.loads(dump.splitlines()[0])
+        assert header["event"] == "loop_liveness_watchdog_fired"
+        assert header["snapshot"] == {
+            "strikes": 2, "probe_interval": 0.01, "probe_timeout": 0.01, "exit_code": 75,
+        }
+        assert "shutdown_watchdog.py" in dump
+        assert "in _watchdog" in dump
+        assert "previous incident" not in dump
 
 def test_heartbeat_write_does_not_block_the_loop_it_monitors():
     """The heartbeat write must not freeze the loop the watchdog is watching.
