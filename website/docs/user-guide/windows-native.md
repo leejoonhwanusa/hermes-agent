@@ -223,9 +223,9 @@ What happens under the hood:
 1. Registers an `ONLOGON` task named `Hermes_Gateway` that runs with the current user's standard permissions.
 2. If schtasks is blocked by group policy, falls back to writing a small `Hermes_Gateway.vbs` launcher (run hidden via `wscript.exe`) into `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`. Same effect, slightly cruder. A VBScript is used rather than a `cmd.exe` shortcut because a console allocated at logon can receive a close event that kills the gateway before it finishes starting.
    Only one of the two is ever kept: a successful task install removes any Startup-folder entry (including a legacy `Hermes_Gateway.cmd`), the fallback is skipped while a task is still registered, and `hermes update` / `hermes doctor --fix` clean up older installs that have both, since both would launch the gateway at logon.
-3. The Scheduled Task runs a hidden service VBS that waits for the Gateway and returns the same exit code. Task Scheduler therefore sees watchdog exit `75` and applies the registered restart-on-failure policy instead of recording an early launcher success.
+3. The Scheduled Task runs a hidden service VBS that waits for the Gateway. If the Gateway exits with service-restart code `75`, the same VBS waits one minute and starts a new Gateway child, up to 255 retries. The Task remains running during these retries; its last run time does not advance for each new child. For exit `0`, other exit codes, or exhausted retries, the VBS returns the child's exit code. The Task also has a restart-on-failure setting, but that setting alone did not restart the Task after a recorded `75` on the installed host.
 
-When the Scheduled Task is installed, `hermes gateway start` and `restart` regenerate the launcher and start that Task. A direct detached spawn is used only when no Task owns the profile, including the Startup-folder fallback; that fallback provides login persistence but not Task Scheduler restart supervision.
+When the Scheduled Task is installed, `hermes gateway start` and `restart` regenerate the launcher and start that Task. A direct detached spawn is used only when no Task owns the profile, including the Startup-folder fallback. The fallback passes `--single-run` to the VBS, so it does not retry exit `75`; it provides login persistence but no Task-owned restart loop.
 
 ### Manage
 
