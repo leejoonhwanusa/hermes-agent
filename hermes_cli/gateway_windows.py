@@ -2,7 +2,8 @@
 
 Mirrors the ``launchd_*`` / ``systemd_*`` contract. ``schtasks /Create ... /RL LIMITED`` runs at the
 CURRENT USER's next logon without elevation. When that Task is installed, manual starts and
-``install --start-now`` use it too so its restart-on-failure policy owns the Gateway lifecycle.
+``install --start-now`` use it too. The VBS launcher restarts the Gateway after its explicit
+service-restart exit; the Task's restart-on-failure policy remains registered separately.
 """
 
 from __future__ import annotations
@@ -55,7 +56,8 @@ _LAST_SPAWN_BREAKAWAY_FALLBACK: dict = {"fallback": False}
 _TASK_NAME_DEFAULT = "Hermes_Gateway"
 _TASK_DESCRIPTION = "Hermes Agent Gateway - Messaging Platform Integration"
 _TASK_LOGON_DELAY = "PT30S"
-_TASK_RESTART_INTERVAL = "PT1M"
+_TASK_RESTART_DELAY_MINUTES = 1
+_TASK_RESTART_INTERVAL = f"PT{_TASK_RESTART_DELAY_MINUTES}M"
 _TASK_RESTART_COUNT = 255
 
 _GATEWAY_ENV = (("PYTHONIOENCODING", "utf-8"), ("HERMES_GATEWAY_DETACHED", "1"), ("HERMES_SUPERVISED_CHILD", "1"))
@@ -414,6 +416,8 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
     No cmd.exe anywhere in the chain. Mirrors ``_build_gateway_cmd_script`` (same env + argv via
     ``_resolve_detached_python``).
     """
+    from gateway.restart import GATEWAY_SERVICE_RESTART_EXIT_CODE
+
     python_exe_path, venv_dir, extra_pythonpath = _resolve_detached_python(python_path)
     # list2cmdline gives CreateProcess-correct quoting for WScript.Shell.Run.
     command_line = subprocess.list2cmdline(_gateway_run_argv(python_exe_path, profile_arg))
@@ -422,7 +426,7 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
     lines = [
         f"' {_TASK_DESCRIPTION}",
         "Option Explicit",
-        "Dim sh, env, existing_pp, exit_code",
+        "Dim sh, env, existing_pp, exit_code, restart_count",
         'Set sh = CreateObject("WScript.Shell")',
         'Set env = sh.Environment("PROCESS")',
         f"env.Item({q('HERMES_HOME')}) = {q(hermes_home)}",
@@ -436,9 +440,18 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
         f"  env.Item({q('PYTHONPATH')}) = {q(static_pythonpath)}",
         "End If",
         f"sh.CurrentDirectory = {q(working_dir)}",
-        # Window style 0 = hidden. Wait for the child and return its status so Task Scheduler's
-        # RestartOnFailure policy can observe watchdog exit 75 instead of a launcher success.
-        f"exit_code = sh.Run({q(command_line)}, 0, True)",
+        # Task Scheduler recorded exit 75 but did not restart the completed task on this host.
+        # Keep the same launcher alive and restart only the gateway's explicit service-restart exit.
+        "restart_count = 0",
+        "Do",
+        f"  exit_code = sh.Run({q(command_line)}, 0, True)",
+        f"  If exit_code <> {GATEWAY_SERVICE_RESTART_EXIT_CODE} Or restart_count >= {_TASK_RESTART_COUNT} Then Exit Do",
+        "  If WScript.Arguments.Count > 0 Then",
+        '    If WScript.Arguments(0) = "--single-run" Then Exit Do',
+        "  End If",
+        "  restart_count = restart_count + 1",
+        f"  WScript.Sleep {_TASK_RESTART_DELAY_MINUTES * 60_000}",
+        "Loop",
         "WScript.Quit exit_code",
     ]
     return "\r\n".join(lines) + "\r\n"
@@ -446,9 +459,10 @@ def _build_gateway_vbs_script(python_path: str, working_dir: str, hermes_home: s
 
 def _build_startup_launcher(script_path: Path) -> str:
     """The tiny Startup-folder .vbs that chains hidden. Quits silently if the target is gone so a
-    stale entry doesn't error on every login."""
+    stale entry doesn't error on every login. Its child runs only once: unlike a Scheduled Task,
+    the Startup fallback has no launcher owner that ``hermes gateway stop`` can end."""
     target = str(script_path.with_suffix(".vbs"))
-    command = subprocess.list2cmdline(["wscript.exe", target])
+    command = subprocess.list2cmdline(["wscript.exe", target, "--single-run"])
     lines = [
         f"' {_TASK_DESCRIPTION}",
         "Option Explicit",

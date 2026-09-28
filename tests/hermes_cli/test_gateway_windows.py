@@ -377,8 +377,7 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
 
 @pytest.mark.platforms("windows")
 def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_path):
-    """A missing wait/exit-code handoff makes Task Scheduler record success before the Gateway
-    exits, so RestartOnFailure never observes watchdog exit 75."""
+    """The launcher must preserve exit 75 after its bounded retries are exhausted."""
     monkeypatch.setattr(
         gateway_windows,
         "_resolve_detached_python",
@@ -389,6 +388,8 @@ def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_pa
         "_gateway_run_argv",
         lambda exe, profile: [sys.executable, "-c", "raise SystemExit(75)"],
     )
+    monkeypatch.setattr(gateway_windows, "_TASK_RESTART_DELAY_MINUTES", 0)
+    monkeypatch.setattr(gateway_windows, "_TASK_RESTART_COUNT", 1)
     launcher = tmp_path / "gateway.vbs"
     launcher.write_text(
         gateway_windows._build_gateway_vbs_script(
@@ -409,6 +410,53 @@ def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_pa
     )
 
     assert result.returncode == 75
+
+
+@pytest.mark.platforms("windows")
+def test_gateway_vbs_restarts_child_after_service_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        gateway_windows,
+        "_resolve_detached_python",
+        lambda exe: (sys.executable, Path(sys.prefix), []),
+    )
+    attempts = tmp_path / "attempts.txt"
+    child_code = (
+        "from pathlib import Path; "
+        f"p = Path({str(attempts)!r}); "
+        "n = int(p.read_text()) + 1 if p.exists() else 1; "
+        "p.write_text(str(n)); raise SystemExit(75 if n == 1 else 0)"
+    )
+    monkeypatch.setattr(
+        gateway_windows,
+        "_gateway_run_argv",
+        lambda exe, profile: [sys.executable, "-c", child_code],
+    )
+    monkeypatch.setattr(gateway_windows, "_TASK_RESTART_DELAY_MINUTES", 0)
+    launcher = tmp_path / "gateway.vbs"
+    launcher.write_text(
+        gateway_windows._build_gateway_vbs_script(
+            sys.executable, str(tmp_path), str(tmp_path / "home"), "",
+        ),
+        encoding="utf-8", newline="",
+    )
+
+    result = subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "cscript.exe"), "//B", "//NoLogo", str(launcher)],
+        check=False, capture_output=True, timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert attempts.read_text() == "2"
+
+    attempts.unlink()
+    single_run = subprocess.run(
+        [str(Path(os.environ["SystemRoot"]) / "System32" / "cscript.exe"),
+         "//B", "//NoLogo", str(launcher), "--single-run"],
+        check=False, capture_output=True, timeout=10,
+    )
+    assert single_run.returncode == 75
+    assert attempts.read_text() == "1"
+    assert "--single-run" in gateway_windows._build_startup_launcher(tmp_path / "gateway.cmd")
 
 
 def test_registered_task_start_leaves_existing_gateway_untouched(monkeypatch, capsys):
