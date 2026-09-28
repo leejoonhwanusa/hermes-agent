@@ -31,7 +31,7 @@ approved_profiles:
   gateway_recovery_ruff:
     description: Scoped Ruff for the recovery source and existing affected tests.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-d925a28037fe4735afb1546a4fb55fd6/venv/Scripts/ruff.exe
-    command_argv: [check, hermes_cli/gateway_windows.py, plugins/platforms/telegram/adapter.py, plugins/platforms/telegram/telegram_network.py, hermes_cli/source_completion.py, hermes_cli/venv_sync.py, tests/hermes_cli/test_gateway_windows.py, tests/gateway/test_telegram_network.py, tests/hermes_cli/test_update_launch_completion.py, tests/hermes_cli/test_venv_sync_currency.py]
+    command_argv: [check, hermes_cli/update_cmd.py, hermes_cli/update_cmd_git.py, tests/hermes_cli/test_update_parked_branch_guard.py, hermes_cli/gateway_windows.py, plugins/platforms/telegram/adapter.py, plugins/platforms/telegram/telegram_network.py, hermes_cli/source_completion.py, hermes_cli/venv_sync.py, tests/hermes_cli/test_gateway_windows.py, tests/gateway/test_telegram_network.py, tests/hermes_cli/test_update_launch_completion.py, tests/hermes_cli/test_venv_sync_currency.py]
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

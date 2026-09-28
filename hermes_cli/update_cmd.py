@@ -887,7 +887,7 @@ def _apply_parked_branch_guard(
     """Decide how a checkout parked on another branch is brought to *branch* (stash-switch-pull-
     switch-back used to "update" main while the running code stayed behind).
 
-    By branch contents + updates.parked_branch_strategy: fully merged -> switch back;
+    By branch contents + updates.parked_branch_strategy: ancestor -> switch back;
     unmerged -> "switch" (default; loud "kept" notice) or "update_in_place" (merge origin/<target>
     INTO the branch, checkout never moves; --switch-branch overrides once); dirty/unverifiable ->
     touch nothing, warn, ``sys.exit(1)`` with the code update SKIPPED (also when the target is
@@ -895,8 +895,13 @@ def _apply_parked_branch_guard(
     """
     if current_branch == branch or current_branch == "HEAD":
         return False, False, None
+    in_place = False
+    with _best_effort('Could not read updates.parked_branch_strategy: %s'):
+        in_place = (
+            not switch_branch
+            and _updates_config().get("parked_branch_strategy", "switch") == "update_in_place")
     switch_safe, switch_block_reason = _m()._assess_parked_branch_switch(
-        git_cmd, _m().PROJECT_ROOT, current_branch, branch)
+        git_cmd, _m().PROJECT_ROOT, current_branch, branch, in_place=in_place)
     if not switch_safe:
         _m()._print_parked_branch_skip_warning(
             git_cmd, _m().PROJECT_ROOT, current_branch, branch, switch_block_reason)
@@ -904,25 +909,17 @@ def _apply_parked_branch_guard(
         print(f"⚠ Update finished — code update SKIPPED{_branch_head_suffix(git_cmd, _m().PROJECT_ROOT)}")
         _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
         sys.exit(1)
-    if not switch_block_reason.startswith("unmerged:"):
-        print(f"  ⚠ Checkout was parked on '{current_branch}' (fully merged) — switching back to {branch}...")
-        return True, False, switch_block_reason
-    _in_place_configured = False
-    with _best_effort('Could not read updates.parked_branch_strategy: %s'):
-        _in_place_configured = (
-            _updates_config().get("parked_branch_strategy", "switch") == "update_in_place")
-    if not _in_place_configured or switch_branch:
+    if switch_block_reason == "in_place":
+        print(
+            f"  ℹ On branch '{current_branch}' — updating it in place from "
+            f"origin/{branch} (no branch switch; local commits preserved).")
+        return False, True, switch_block_reason
+    if switch_block_reason.startswith("unmerged:"):
         _m()._print_parked_branch_kept_notice(
             current_branch, branch, switch_block_reason.split(":", 1)[1])
-        return True, False, switch_block_reason
-    # --branch typos used to surface via the checkout failing, which this path skips.
-    if _git_run(git_cmd, ["rev-parse", "--verify", "--quiet", f"origin/{branch}"]).returncode != 0:
-        print(f"✗ Branch '{branch}' does not exist locally or on origin.")
-        sys.exit(1)
-    print(
-        f"  ℹ On branch '{current_branch}' — updating it in place from "
-        f"origin/{branch} (no branch switch; local commits preserved).")
-    return False, True, switch_block_reason
+    else:
+        print(f"  ⚠ Checkout was parked on '{current_branch}' (fully merged) — switching back to {branch}...")
+    return True, False, switch_block_reason
 
 
 def _prepare_checkout_for_update(

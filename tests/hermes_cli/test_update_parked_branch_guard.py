@@ -323,6 +323,18 @@ def test_update_updates_unmerged_branch_in_place_when_configured(
     _git(repo_pair, "commit", "-qm", "feature work")
     _patch_update_flow(monkeypatch, repo_pair)
 
+    # In-place merging does not need patch-equivalence over upstream history.
+    # On a treeless clone that comparison causes serial lazy object downloads.
+    import hermes_cli.update_cmd_git as git_plumbing
+
+    real_git_run = git_plumbing._git_run
+
+    def no_patch_comparison(git_cmd, args, *positional, **kwargs):
+        assert args[0] != "cherry", "in-place update must not compare upstream patches"
+        return real_git_run(git_cmd, args, *positional, **kwargs)
+
+    monkeypatch.setattr(git_plumbing, "_git_run", no_patch_comparison)
+
     # Stop right after the pull/branch logic, before dependency install.
     class _StopFlow(Exception):
         pass

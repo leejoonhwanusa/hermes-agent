@@ -158,13 +158,17 @@ def _branch_head_suffix(git_cmd=None, cwd=None) -> str:
     return f" [{label}]" if label else ""
 
 
-def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: str, target_branch: str) -> tuple[bool, str]:
+def _assess_parked_branch_switch(
+    git_cmd: list[str], cwd: Path, current_branch: str, target_branch: str,
+    *, in_place: bool = False,
+) -> tuple[bool, str]:
     """Decide whether a parked feature branch may be auto-switched back to the update target.
 
     - (True, "") — tree clean and every parked commit is in ``origin/<target>`` (no ``git cherry +``).
     - (True, "unmerged:<n>") — tree clean but commits not in target; switching is safe (checkout keeps
       committed work) but caller must print a LOUD notice. Non-interactive callers (desktop, gateway
       /update, cron) can't resolve a skip, so a clean checkout must reach target.
+    - (True, "in_place") — explicitly keep a clean non-ancestor branch; no patch comparison.
     - (False, "disabled"|"dirty"|"unverifiable") — caller must NOT touch the branch. Dirty is the
       genuinely unsafe case: uncommitted work riding an autostash across branches.
     A config read failure must not disable the safety checks: fall through with the default."""
@@ -181,6 +185,18 @@ def _assess_parked_branch_switch(git_cmd: list[str], cwd: Path, current_branch: 
         return False, "unverifiable"
     if status.stdout.strip():
         return False, "dirty"
+    if in_place:
+        target = f"origin/{target_branch}"
+        if _git_run(git_cmd, ["rev-parse", "--verify", "--quiet", f"{target}^{{commit}}"], cwd).returncode != 0:
+            return False, "unverifiable"
+        # Patch equality is unnecessary when preserving the branch. On treeless
+        # clones git cherry would lazily fetch upstream trees and blobs serially.
+        ancestor = _git_run(git_cmd, ["merge-base", "--is-ancestor", "HEAD", target], cwd)
+        if ancestor.returncode == 0:
+            return True, ""
+        if ancestor.returncode == 1:
+            return True, "in_place"
+        return False, "unverifiable"
     cherry = _git_run(git_cmd, ["cherry", f"origin/{target_branch}"], cwd)
     if cherry.returncode != 0:
         return False, "unverifiable"
