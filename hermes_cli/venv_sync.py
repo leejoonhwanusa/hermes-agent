@@ -10,9 +10,34 @@ import argparse
 import json
 import os
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 
 from hermes_cli.steward import UPDATE_MECHANISMS
+
+
+@dataclass
+class _SourceCompletionState:
+    root: Path
+    dependencies_changed: bool = False
+
+
+_active_source_completion: ContextVar[_SourceCompletionState | None] = ContextVar(
+    "active_source_completion", default=None,
+)
+
+
+@contextmanager
+def source_completion_scope(root: Path):
+    """Identify reentrant launches from this checkout's own completion tail."""
+    state = _SourceCompletionState(Path(root).resolve())
+    token = _active_source_completion.set(state)
+    try:
+        yield state
+    finally:
+        _active_source_completion.reset(token)
 
 
 def _project_root() -> Path:
@@ -248,6 +273,14 @@ def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
 
     current = pm.venv_is_current(project_root=root)
     pending = completion_pending_path(root)
+    # Product builds can outlive the shared marker's 20-minute ceiling. A CLI
+    # import inside this same completion still owes the tail to its outer call.
+    completion = _active_source_completion.get()
+    if completion is not None and completion.root == root:
+        if not current:
+            completion.dependencies_changed = True
+            raise RuntimeError("source completion dependencies changed during maintenance")
+        return None
     if not current or pending.is_file():
         lock = UpdateLock()
         if not lock.acquire():

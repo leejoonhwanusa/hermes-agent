@@ -291,3 +291,46 @@ def test_launch_under_the_owning_update_does_not_run_the_tail_again(tmp_path, mo
     assert completion_tail == []
     assert pending.is_file(), "the owning update's obligation was discharged by its own tail"
 
+
+def test_long_source_completion_does_not_start_another_tail(tmp_path, monkeypatch, completion_tail):
+    """A long product build can outlive the update marker's 20-minute ceiling."""
+    import time
+    import pm
+    from hermes_cli.source_completion import complete_source_checkout
+    from hermes_cli.update_lock import UPDATE_MARKER_MAX_AGE_SECONDS, update_marker_path
+
+    root = _self_checkout(tmp_path, monkeypatch)
+    pending = venv_sync.completion_pending_path(root)
+    pending.parent.mkdir(parents=True)
+    pending.write_text("owed\n")
+    marker = update_marker_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(f"{os.getpid()}\n{time.time() - UPDATE_MARKER_MAX_AGE_SECONDS - 1}\n")
+    monkeypatch.setattr(pm, "venv_is_current", lambda **kw: True)
+    monkeypatch.setattr(venv_sync, "publish_launchers", lambda _root: None)
+    monkeypatch.setattr("hermes_cli._launchers.resolve_store_python", lambda _root: Path(sys.executable))
+
+    def build(_root, *, desktop):
+        assert venv_sync.prepare_launch(root, []) is None
+
+    monkeypatch.setattr("hermes_cli.source_build.build_update_products", build)
+    monkeypatch.setattr("hermes_cli.update_cmd_maint._run_post_update_maintenance", lambda **kw: False)
+
+    assert not complete_source_checkout(root, desktop=False, assume_yes=True)
+    assert completion_tail == []
+    assert pending.is_file()
+
+    # The real CLI bootstrap catches preparation errors. Its swallowed drift
+    # must still make the outer completion fail and leave the obligation due.
+    monkeypatch.setattr(pm, "venv_is_current", lambda **kw: False)
+
+    def build_with_swallowed_drift(_root, *, desktop):
+        with pytest.raises(RuntimeError, match="dependencies changed"):
+            venv_sync.prepare_launch(root, [])
+
+    monkeypatch.setattr("hermes_cli.source_build.build_update_products", build_with_swallowed_drift)
+    monkeypatch.setattr("hermes_cli.update_cmd_maint._run_post_update_maintenance", lambda **kw: True)
+    monkeypatch.setattr("hermes_cli.source_stamp.write_source_stamp", lambda _root: None)
+    with pytest.raises(RuntimeError, match="dependencies changed"):
+        complete_source_checkout(root, desktop=False, assume_yes=True)
+    assert pending.is_file()

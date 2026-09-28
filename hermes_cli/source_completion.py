@@ -44,38 +44,41 @@ def complete_source_checkout(
     """
     from hermes_cli.source_build import build_update_products
     from hermes_cli.update_cmd_maint import _run_post_update_maintenance
-    from hermes_cli.venv_sync import publish_launchers
+    from hermes_cli.venv_sync import publish_launchers, source_completion_scope
 
     root = Path(root)
-    try:
-        from hermes_cli._subprocess_compat import expose_pm_git
-
-        # The builds, the release-history refresh and the install stamp all run
-        # git; a fresh Windows machine has only PM's.
-        expose_pm_git(root)
-    except Exception as exc:  # noqa: BLE001 — git-less steps below still complete
-        print(f"⚠ Could not provide git for the source completion: {exc}", file=sys.stderr)
-    publish_launchers(root)
-    build_update_products(root, desktop=desktop)
-    if announce:
-        print(announce)
-    complete = _run_post_update_maintenance(
-        assume_yes=assume_yes,
-        gateway_mode=gateway_mode,
-        pre_update_snapshot_id=pre_update_snapshot_id,
-        had_desktop_app_before_update=desktop,
-        pre_update_version=pre_update_version,
-        completion_message=completion_message,
-    )
-    if complete:
-        from hermes_cli.source_stamp import write_source_stamp
-
+    with source_completion_scope(root) as completion:
         try:
-            write_source_stamp(root)
-        except (OSError, ValueError) as exc:
-            print(f"⚠ Source update completed, but the install stamp could not be written: {exc}",
-                  file=sys.stderr)
-    return complete
+            from hermes_cli._subprocess_compat import expose_pm_git
+
+            # The builds, the release-history refresh and the install stamp all run
+            # git; a fresh Windows machine has only PM's.
+            expose_pm_git(root)
+        except Exception as exc:  # noqa: BLE001 — git-less steps below still complete
+            print(f"⚠ Could not provide git for the source completion: {exc}", file=sys.stderr)
+        publish_launchers(root)
+        build_update_products(root, desktop=desktop)
+        if announce:
+            print(announce)
+        complete = _run_post_update_maintenance(
+            assume_yes=assume_yes,
+            gateway_mode=gateway_mode,
+            pre_update_snapshot_id=pre_update_snapshot_id,
+            had_desktop_app_before_update=desktop,
+            pre_update_version=pre_update_version,
+            completion_message=completion_message,
+        )
+        if completion.dependencies_changed:
+            raise RuntimeError("source completion dependencies changed during maintenance")
+        if complete:
+            from hermes_cli.source_stamp import write_source_stamp
+
+            try:
+                write_source_stamp(root)
+            except (OSError, ValueError) as exc:
+                print(f"⚠ Source update completed, but the install stamp could not be written: {exc}",
+                      file=sys.stderr)
+        return complete
 
 
 def _bootstrap_command(root: Path, argv: list[str]) -> list[str]:
