@@ -3053,9 +3053,14 @@ class TelegramAdapter(BasePlatformAdapter):
             _updates_transport_kwargs = dict(_transport_kwargs)
             if _updates_limits is not None:
                 _updates_transport_kwargs["limits"] = _updates_limits
+            request_transport = await TelegramFallbackTransport.create(fallback_ips, **_transport_kwargs)
+            try:
+                updates_transport = await TelegramFallbackTransport.create(fallback_ips, **_updates_transport_kwargs)
+            except BaseException:
+                await request_transport.aclose()
+                raise
             request, get_updates_request = _pair(
-                {"transport": TelegramFallbackTransport(fallback_ips, **_transport_kwargs)},
-                {"transport": TelegramFallbackTransport(fallback_ips, **_updates_transport_kwargs)})
+                {"transport": request_transport}, {"transport": updates_transport})
         elif proxy_url:
             logger.info("[%s] Proxy detected; passing explicitly to HTTPXRequest: %s", self.name, proxy_url)
             request, get_updates_request = _pair(_with_limits(), {"limits": _updates_limits}, proxy=proxy_url)

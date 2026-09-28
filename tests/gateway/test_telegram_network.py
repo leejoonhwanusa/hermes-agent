@@ -19,6 +19,7 @@ and "stick" to whichever path works.
 import httpx
 import pytest
 import socket
+import threading
 
 import plugins.platforms.telegram.telegram_network as tnet
 
@@ -291,6 +292,45 @@ class TestFallbackTransportClose:
         # 1 primary + 2 fallback transports
         assert len(factory.instances) == 3
         assert all(t.closed for t in factory.instances)
+
+
+@pytest.mark.asyncio
+async def test_replacement_transports_are_built_off_the_event_loop(monkeypatch):
+    """A slow TLS context load during network recovery must leave the loop responsive."""
+    loop_thread = threading.get_ident()
+    constructor_threads = []
+
+    def factory(**kwargs):
+        constructor_threads.append(threading.get_ident())
+        return FakeTransport([], {})
+
+    monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", factory)
+    transport = tnet.TelegramFallbackTransport(["149.154.167.220"])
+    try:
+        await transport._get_fallback("149.154.167.220")
+        await transport._reset_primary(transport._primary)
+        assert len(constructor_threads) == 3
+        assert all(thread != loop_thread for thread in constructor_threads[1:])
+    finally:
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_initial_transport_is_built_off_the_event_loop(monkeypatch):
+    loop_thread = threading.get_ident()
+    constructor_threads = []
+
+    def factory(**kwargs):
+        constructor_threads.append(threading.get_ident())
+        return FakeTransport([], {})
+
+    monkeypatch.setattr(tnet.httpx, "AsyncHTTPTransport", factory)
+    transport = await tnet.TelegramFallbackTransport.create(["149.154.167.220"])
+    try:
+        assert len(constructor_threads) == 1
+        assert constructor_threads[0] != loop_thread
+    finally:
+        await transport.aclose()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Config layer – TELEGRAM_FALLBACK_IPS env → config.extra

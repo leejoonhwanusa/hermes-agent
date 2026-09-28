@@ -56,7 +56,7 @@ _TASK_NAME_DEFAULT = "Hermes_Gateway"
 _TASK_DESCRIPTION = "Hermes Agent Gateway - Messaging Platform Integration"
 _TASK_LOGON_DELAY = "PT30S"
 _TASK_RESTART_INTERVAL = "PT1M"
-_TASK_RESTART_COUNT = 999
+_TASK_RESTART_COUNT = 255
 
 _GATEWAY_ENV = (("PYTHONIOENCODING", "utf-8"), ("HERMES_GATEWAY_DETACHED", "1"), ("HERMES_SUPERVISED_CHILD", "1"))
 
@@ -872,6 +872,11 @@ def _start_or_report_running(running_pids: list[int] | None = None) -> None:
 
 def _start_registered_task(task_name: str) -> None:
     """Regenerate the launcher and start the Task that owns restart-on-failure supervision."""
+    running_pids = _gateway_pids()
+    if running_pids:
+        _report_already_running(running_pids)
+        print("⚠ Task supervision is not confirmed for this existing Gateway; restart it to adopt the Task.")
+        return
     _write_task_script()
     code, out, err = _exec_schtasks(["/Run", "/TN", task_name])
     if code != 0:

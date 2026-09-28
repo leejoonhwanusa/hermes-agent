@@ -340,7 +340,8 @@ def test_install_scheduled_task_recreates_instead_of_change(monkeypatch, tmp_pat
     assert "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>" in xml_seen["text"]
     assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in xml_seen["text"]
     assert "<RestartOnFailure>" in xml_seen["text"]
-    assert "<Count>999</Count>" in xml_seen["text"]
+    restart_count = int(xml_seen["text"].split("<Count>", 1)[1].split("</Count>", 1)[0])
+    assert 1 <= restart_count <= 255
     # Scheduled Task launches the console-less .vbs via wscript.exe, never cmd.exe
     # (issue #45599 fix A: no console -> no logon CTRL_CLOSE_EVENT / 0xC000013A).
     assert "<Command>wscript.exe</Command>" in xml_seen["text"]
@@ -374,7 +375,7 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
     assert content.endswith("\r\n")
 
 
-@pytest.mark.windows_only
+@pytest.mark.platforms("windows")
 def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_path):
     """A missing wait/exit-code handoff makes Task Scheduler record success before the Gateway
     exits, so RestartOnFailure never observes watchdog exit 75."""
@@ -408,6 +409,25 @@ def test_gateway_vbs_waits_for_child_and_returns_its_failure(monkeypatch, tmp_pa
     )
 
     assert result.returncode == 75
+
+
+def test_registered_task_start_leaves_existing_gateway_untouched(monkeypatch, capsys):
+    """Installing supervision must not claim a live direct-spawn gateway was adopted."""
+    monkeypatch.setattr(gateway_windows, "_gateway_pids", lambda: [12345])
+    monkeypatch.setattr(
+        gateway_windows, "_write_task_script",
+        lambda: pytest.fail("must not rewrite the launcher for an existing gateway"),
+    )
+    monkeypatch.setattr(
+        gateway_windows, "_exec_schtasks",
+        lambda argv: pytest.fail("must not launch a second gateway"),
+    )
+
+    gateway_windows._start_registered_task("Hermes_Gateway")
+
+    output = capsys.readouterr().out
+    assert "already running" in output
+    assert "supervision is not confirmed" in output
 
 
 def test_atomic_write_leaves_no_staging_file_when_swap_fails(monkeypatch, tmp_path):

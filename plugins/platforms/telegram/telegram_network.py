@@ -92,11 +92,20 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
         self._sticky_lock = asyncio.Lock()
         self._last_failure: tuple[str, str] | None = None
 
+    @classmethod
+    async def create(cls, fallback_ips: Iterable[str], **transport_kwargs) -> "TelegramFallbackTransport":
+        """Build the initial TLS context without blocking the gateway event loop."""
+        return await asyncio.to_thread(cls, fallback_ips, **transport_kwargs)
+
+    async def _new_transport(self) -> httpx.AsyncHTTPTransport:
+        # AsyncHTTPTransport construction loads the Windows trust store synchronously.
+        return await asyncio.to_thread(httpx.AsyncHTTPTransport, **self._transport_kwargs)
+
     async def _get_fallback(self, ip: str) -> httpx.AsyncHTTPTransport:
         async with self._fallback_lock:
             transport = self._fallbacks.get(ip)
             if transport is None:
-                transport = httpx.AsyncHTTPTransport(**self._transport_kwargs)
+                transport = await self._new_transport()
                 self._fallbacks[ip] = transport
             return transport
 
@@ -105,7 +114,7 @@ class TelegramFallbackTransport(httpx.AsyncBaseTransport):
         async with self._primary_lock:
             if self._primary_closed or transport is not self._primary:
                 return
-            self._primary = httpx.AsyncHTTPTransport(**self._transport_kwargs)
+            self._primary = await self._new_transport()
         try:
             await transport.aclose()
         except Exception as exc:
