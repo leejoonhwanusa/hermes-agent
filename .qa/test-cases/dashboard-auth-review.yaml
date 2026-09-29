@@ -1,0 +1,22 @@
+test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-REVIEW
+project_id: hermes-agent
+title: Independent review of installed Agent dashboard authentication and runtime access
+purpose: Review dashboard-auth source evidence or authorized runtime-adoption and access evidence while keeping those claims distinct.
+preconditions:
+  - Freeze a source-bound subject and independent_code_review plan before a source review, or a runtime-bound subject and plan before a runtime review.
+  - Use a real fresh read-only named qa agent with observed gpt-6-astra/high provenance, separate from the implementer.
+steps:
+  - For a source review, inspect the exact source diff and source-regression Evidence against the source plan.
+  - For a runtime review, inspect the selected runtime-access case's current plan and timestamped source/path, task/process, endpoint, authentication, and applied-route observations against that runtime plan.
+  - Submit the unmodified ReviewObservation through the existing manual adapter and report source and runtime conclusions separately.
+expected_results:
+  - The observation is attributable to the current Run/item/source and records findings and limits accurately; source regression PASS alone does not establish runtime adoption or access.
+requirement_refs: [AGENTS.md, .qa/contract.yaml, C:/Project/Hanil-QA/AGENTS.md]
+risk: high
+tags: [independent_code_review, runtime_acceptance, auth, websocket, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 2
+created_at: '2026-09-29T09:02:44+00:00'
+updated_at: '2026-09-29T09:30:08+00:00'

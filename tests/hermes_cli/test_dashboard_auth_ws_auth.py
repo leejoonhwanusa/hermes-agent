@@ -5,10 +5,8 @@ The dashboard's WS endpoints (``/api/pty``, ``/api/console``, ``/api/ws``,
 loopback mode it accepts ``?token=<_SESSION_TOKEN>``; in gated mode it accepts
 a single-use ``?ticket=`` minted by ``POST /api/auth/ws-ticket``.
 
-These tests exercise the helper at the unit level (no actual WS upgrade)
-plus the ticket-mint endpoint under realistic gated-mode setup. We don't
-test the full WS upgrade because the starlette TestClient WS path has a
-pre-existing regression unrelated to dashboard-auth.
+These tests exercise the helper, ticket endpoint, and session-bound sockets
+through the production ASGI composition and real Basic login/logout routes.
 """
 
 from __future__ import annotations
@@ -109,6 +107,79 @@ def _logged_in(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 # POST /api/auth/ws-ticket — the mint endpoint
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_revocation_in_handler_preserves_async_cleanup(gated_app):
+    import asyncio
+    import threading
+
+    import plugins.dashboard_auth.basic as basic
+    from starlette.websockets import WebSocketDisconnect
+    from hermes_cli.dashboard_auth.ws_tickets import consume_ticket, wrap_asgi_with_ws_sessions
+
+    clear_providers()
+    provider = basic.BasicAuthProvider(username="admin", password_hash=basic.hash_password("hunter2"),
+                                       secret=b"test-revocation-cleanup-secret!!!")
+    register_provider(provider)
+    session = provider.complete_password_login(username="admin", password="hunter2")
+    ticket = mint_ticket(user_id=session.user_id, provider=session.provider,
+                         access_token=session.access_token)
+    cleaned = threading.Event()
+    messages = []
+
+    async def app(scope, receive, send):
+        consume_ticket(ticket, scope=scope)
+        provider.logout_session(access_token=session.access_token, refresh_token="")
+        try:
+            await send({"type": "websocket.accept"})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            # This suspension reproduces real transport/session teardown.
+            await asyncio.to_thread(cleaned.set)
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        messages.append(message)
+
+    await wrap_asgi_with_ws_sessions(app)({"type": "websocket"}, receive, send)
+    assert cleaned.is_set()
+    assert messages == [{"type": "websocket.close", "code": 4401}]
+
+
+def test_basic_logout_closes_idle_socket_and_preserves_other_login(gated_app, monkeypatch):
+    import plugins.dashboard_auth.basic as basic
+    from starlette.websockets import WebSocketDisconnect
+
+    clear_providers()
+    register_provider(basic.BasicAuthProvider(
+        username="admin", password_hash=basic.hash_password("hunter2"),
+        secret=b"test-revocation-secret-32-bytes!!!"))
+    monkeypatch.setattr(web_server, "_DASHBOARD_EMBEDDED_CHAT_ENABLED", True)
+    config, _ = web_server._build_uvicorn_server("fly-app.fly.dev", 443, ssh_isolated=True)
+    first = TestClient(config.app, base_url="https://fly-app.fly.dev")
+    other = TestClient(config.app, base_url="https://fly-app.fly.dev")
+    for client in (first, other):
+        assert client.post("/auth/password-login", json={
+            "provider": "basic", "username": "admin", "password": "hunter2",
+        }).status_code == 200
+    first_ticket = first.post("/api/auth/ws-ticket").json()["ticket"]
+    other_ticket = other.post("/api/auth/ws-ticket").json()["ticket"]
+    with first.websocket_connect(f"wss://fly-app.fly.dev/api/events?channel=revoke&ticket={first_ticket}") as old:
+        with other.websocket_connect(f"wss://fly-app.fly.dev/api/events?channel=keep&ticket={other_ticket}") as alive:
+            assert first.post("/auth/logout", follow_redirects=False).status_code == 302
+            # No client frame: the idle check must revoke this accepted socket.
+            with pytest.raises(WebSocketDisconnect) as disconnected:
+                old.receive_text()
+            assert disconnected.value.code == 4401
+            assert other.get("/api/auth/me").status_code == 200
+            publish_ticket = other.post("/api/auth/ws-ticket").json()["ticket"]
+            with other.websocket_connect(f"wss://fly-app.fly.dev/api/pub?channel=keep&ticket={publish_ticket}") as publisher:
+                publisher.send_text("still connected")
+                assert alive.receive_text() == "still connected"
 
 
 class TestWsTicketEndpoint:
@@ -473,4 +544,3 @@ class TestGatewayWsUrl:
         gw_cred = gw.split("internal=")[1].split("&")[0]
         sc_cred = sc.split("internal=")[1].split("&")[0]
         assert gw_cred == sc_cred
-

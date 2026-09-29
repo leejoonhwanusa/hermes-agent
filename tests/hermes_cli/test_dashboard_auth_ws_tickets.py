@@ -33,6 +33,43 @@ def _reset():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize('case', ['valid', 'revoked', 'replaced', 'missing', 'unavailable', 'wrong-user'])
+def test_basic_ticket_rechecks_issuing_session(case):
+    from hermes_cli.dashboard_auth import clear_providers, register_provider
+    from plugins.dashboard_auth.basic import BasicAuthProvider, hash_password
+
+    clear_providers()
+    kwargs = dict(username='admin', password_hash=hash_password('test-password'), secret=b'1' * 32)
+    provider = BasicAuthProvider(**kwargs)
+    register_provider(provider)
+    try:
+        session = provider.complete_password_login(username='admin', password='test-password')
+        ticket = mint_ticket(user_id='other' if case == 'wrong-user' else 'admin', provider='basic',
+                             access_token=session.access_token)
+        if case == 'revoked':
+            provider.logout_session(access_token=session.access_token, refresh_token='')
+        elif case in ('replaced', 'missing'):
+            clear_providers()
+            with pytest.raises(TicketInvalid):
+                mint_ticket(user_id='admin', provider='basic', access_token=session.access_token)
+            if case == 'replaced':
+                register_provider(BasicAuthProvider(**kwargs))
+        elif case == 'unavailable':
+            provider._sessions_path.write_text('broken', encoding='utf-8')
+        if case == 'valid':
+            assert set(consume_ticket(ticket)) == {'user_id', 'provider', 'minted_at'}
+        else:
+            with pytest.raises(TicketInvalid):
+                consume_ticket(ticket)
+        with pytest.raises(TicketInvalid):
+            consume_ticket(ticket)
+        if case != 'missing':
+            with pytest.raises(TicketInvalid):
+                mint_ticket(user_id='admin', provider='basic')
+    finally:
+        clear_providers()
+
+
 class TestMintAndConsume:
     def test_round_trip(self):
         ticket = mint_ticket(user_id="u1", provider="nous")

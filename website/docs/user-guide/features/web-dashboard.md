@@ -753,7 +753,9 @@ curl -s http://<host>:9119/api/status | jq '.auth_required, .auth_providers'
 
 If you don't want to wire up an OAuth identity provider — a self-hosted "just put a password on my dashboard" deployment — the bundled `plugins/dashboard_auth/basic` plugin registers a `DashboardAuthProvider` named `basic` that authenticates with a **username and password** instead of an OAuth redirect.
 
-It plugs into the same gate as the OAuth provider: the gate engages on a non-loopback bind, the login page renders a credential form for this provider (instead of a "Log in with X" button), and everything downstream of login — session cookies, transparent refresh, WS tickets, logout, the audit log — is identical to the OAuth path. Sessions are stateless HMAC-signed tokens the provider mints itself, so there's **no database and no external IDP**. Password hashing uses stdlib `scrypt` (no third-party dependency).
+It plugs into the same gate as the OAuth provider: the gate engages on a non-loopback bind, and the login page renders a credential form for this provider (instead of a "Log in with X" button). HMAC-signed access and refresh tokens share a random login-session ID recorded in the active profile's `dashboard-basic-sessions.json`. There is **no database and no external IDP**. Password hashing uses stdlib `scrypt` (no third-party dependency).
+
+Basic logout durably revokes that login session before clearing cookies. Previously issued access tokens, refresh tokens and unused WebSocket tickets for that session are then rejected; other logins remain active. Session-bound WebSockets recheck authentication before accepting or forwarding frames, and an idle check closes revoked connections with code `4401`. The idle interval is one second plus verification time. Already-authorized in-flight work is not rolled back. A missing or corrupt session store fails closed. After upgrading from stateless Basic sessions, sign in again; do not restore old stateless code while keeping public access open, since old tokens may become valid again.
 
 :::warning Use this on trusted networks only — not the public internet
 The username/password provider is intended for self-hosted / on-prem / homelab dashboards on a **trusted network**, or reachable only over a **VPN**. It protects a single shared credential with no external identity provider, MFA, or per-user accounts behind it, so it is **not suitable for exposing a dashboard directly to the public internet**. For an internet-facing dashboard, use the [Nous Research provider](#default-provider-nous-research) (or your own [self-hosted OIDC](#self-hosted-oidc-provider) / [custom OAuth](#custom-providers) provider) instead.
@@ -1055,6 +1057,8 @@ All three are `Path=/`. The session cookies are `SameSite=Lax`; the PKCE cookie 
 ### Logout
 
 The sidebar widget shows `Logged in as <user_id…> via nous` with a logout icon. Clicking it POSTs `/auth/logout`, which clears all dashboard-auth cookies and redirects back to `/login`.
+
+For Basic authentication, logout first persists server-side session revocation. If that write fails, the endpoint returns `503` and retains the cookies so the user can retry; it does not report a successful logout. Other providers retain their provider-specific revocation behavior.
 
 ### Audit log
 

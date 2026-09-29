@@ -1,0 +1,28 @@
+test_case_id: HQ-HERMES-AGENT-DASHBOARD-RUNTIME-ACCESS
+project_id: hermes-agent
+title: Installed Agent dashboard authentication runtime access
+purpose: Capture operator-observed installed-runtime adoption and dashboard authentication access without automating live actions.
+preconditions:
+  - The user/operator completes any required administrative action; observe only after the Dashboard task and listener are stopped and the source patch is applied to the installed checkout.
+  - Complete source-focused Acceptance first and freeze a fresh Windows runtime_acceptance subject and immutable plan for the installed target.
+  - Redact credentials, cookies, tokens, and secret-bearing configuration; timestamped user observations are acceptable.
+steps:
+  - Record the installed source commit, artifact digest, and resolved installed path.
+  - Record the scheduled-task name, action and working directory, then identify the owned new process PID and start time and observe its listener at 127.0.0.1:9119.
+  - Verify anonymous /api/auth/me returns 401; from the actual public hostname, verify owner Cloudflare Access precedes Dashboard login and logout denies protected access, recording timestamped user observations.
+  - Record the applied cloudflared configuration, owned process path, Access AUD, team/domain and route, with secrets redacted.
+  - Confirm shared MCP and FIFA configuration is preserved and report each service's actual availability separately.
+  - Observe the operator surface at http://192.168.1.2:3010/health.
+expected_results:
+  - Source identity, resolved path, scheduled-task configuration, owned process identity and observed listener are recorded against the current runtime plan.
+  - Anonymous and public-host authentication observations, applied tunnel/access route details, configuration preservation, and separate service availability are recorded with timestamps and no secrets.
+  - Live replay/open-WebSocket behavior, natural reboot behavior, and POSIX integration remain explicitly excluded or unobserved; source checks alone are not runtime-adoption evidence.
+requirement_refs: [AGENTS.md, .qa/contract.yaml, .qa/README.md, C:/Project/Hanil-QA/AGENTS.md]
+risk: high
+tags: [runtime_acceptance, auth, windows, manual, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 1
+created_at: '2026-09-29T09:30:08+00:00'
+updated_at: '2026-09-29T09:30:08+00:00'

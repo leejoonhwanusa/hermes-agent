@@ -153,15 +153,24 @@ def _(rid, params: dict) -> dict:
     the bridge dials THIS profile's RFB socket, and a server-minted viewer id (returned to the caller,
     who passes it to ``display.lease.acquire`` / ``release``) so the lease can name the holder."""
     from hermes_constants import get_hermes_home
-    from hermes_cli.dashboard_auth.ws_tickets import mint_ticket
+    from hermes_cli.dashboard_auth.registry import get_provider
+    from hermes_cli.dashboard_auth.ws_tickets import TicketInvalid, mint_ticket
+    from tui_gateway.transport import current_transport
     from tools.bot_desktop import runtime as _bd_runtime
     try:
         # The bridge dials either the host RFB socket or the sandbox relay; neither exists before start.
         if _bd_runtime.rfb_socket_path() is None and not _bd_runtime.sandbox_screen_running():
             return _err(rid, _DISPLAY_ERR, "this profile's Bot Desktop is not running; call display.start first")
         viewer_id = _mint_viewer_id(str(params.get("viewer_id") or "").strip())
+        transport = current_transport()
+        binding = getattr(transport, "_dashboard_session_binding", None)
+        identity = getattr(transport, "auth_identity", None) or {}
+        provider = get_provider(identity.get("provider", ""))
+        if provider is not None and provider.bind_ws_ticket_session and binding is None:
+            raise TicketInvalid("parent session binding missing")
         ticket = mint_ticket(user_id=f"display:{viewer_id}", provider="bot-desktop",
-                             extra={"hermes_home": str(get_hermes_home()), "viewer_id": viewer_id})
+                             extra={"hermes_home": str(get_hermes_home()), "viewer_id": viewer_id},
+                             session_binding=binding)
         return _ok(rid, {"ticket": ticket, "path": "/api/display/ws", "viewer_id": viewer_id,
                          **_display_snapshot()})
     except Exception as e:

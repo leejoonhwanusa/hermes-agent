@@ -111,6 +111,20 @@ class DashboardAuthProvider(ABC):
     supports_password: bool = False
     supports_token: bool = False
     supports_session: bool = True
+    cache_refresh_success: bool = True  # Revocable local sessions must recheck the store.
+    bind_ws_ticket_session: bool = False  # Revalidate the issuing session on ticket consumption.
+
+    def logout_session(self, *, access_token: str, refresh_token: str) -> None:
+        """Legacy providers revoke best-effort; durable providers may raise ProviderError.
+
+        An override can revoke access-only sessions and require persistence before the
+        logout route reports success, without changing the legacy revoke_session API.
+        """
+        if refresh_token:
+            try:
+                self.revoke_session(refresh_token=refresh_token)
+            except Exception:
+                pass  # Preserve best-effort OAuth provider behavior.
 
     @abstractmethod
     def start_login(self, *, redirect_uri: str) -> LoginStart: ...

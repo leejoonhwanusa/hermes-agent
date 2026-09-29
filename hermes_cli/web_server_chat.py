@@ -270,7 +270,7 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
             return "no_credential", "none"
 
         try:
-            info = consume_ticket(ticket)
+            info = consume_ticket(ticket, scope=getattr(ws, "scope", None))
             if info.get("provider") == "bot-desktop":
                 # A display ticket admits one RFB bridge on /api/display/ws (a watch-only
                 # capability handed to a screen viewer); it must not double as a login here.

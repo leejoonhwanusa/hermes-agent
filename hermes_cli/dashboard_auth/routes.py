@@ -8,7 +8,7 @@ allowlists the public ones.
   GET  /auth/native/authorize  RFC 8252 native-app (desktop) login start
   GET  /auth/callback          completes login, sets session cookies
   POST /auth/password-login    username/password login (JSON)
-  POST /auth/logout            clears cookies, best-effort revoke
+  POST /auth/logout            revoke sessions, then clear cookies (provider-dependent durability)
   POST /auth/native/token      loopback code -> bearer tokens
   POST /auth/native/refresh    desktop-held refresh token rotation
   GET  /api/auth/providers     list registered providers (login bootstrap)
@@ -420,13 +420,12 @@ async def auth_password_login(request: Request, body: _PasswordLoginBody):
 
 @router.post("/auth/logout", name="auth_logout")
 async def auth_logout(request: Request):
-    _at, rt = read_session_cookies(request)
-    # Best-effort revoke on every provider; failures logged, never raised.
-    for provider in list_providers() if rt else ():
+    at, rt = read_session_cookies(request)
+    for provider in list_providers() if (at or rt) else ():
         try:
-            provider.revoke_session(refresh_token=rt)
-        except Exception as e:  # noqa: BLE001 — best-effort
-            _log.warning("dashboard-auth: revoke on %r failed: %s", provider.name, e)
+            provider.logout_session(access_token=at or '', refresh_token=rt or '')
+        except Exception:  # Durable revocation must not silently report success.
+            raise _http(503, 'Session revocation unavailable; retry logout') from None
     sess = getattr(request.state, "session", None)
     _audit(request, AuditEvent.LOGOUT, provider=(sess.provider if sess else "unknown"),
            user_id=(sess.user_id if sess else ""))
@@ -461,7 +460,7 @@ async def api_auth_ws_ticket(request: Request):
     ``Authorization`` on the upgrade); one ticket per WS."""
     sess = _require_session(request)
     from hermes_cli.dashboard_auth.ws_tickets import TTL_SECONDS, mint_ticket
-    ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider)
+    ticket = mint_ticket(user_id=sess.user_id, provider=sess.provider, access_token=sess.access_token)
     _audit(request, AuditEvent.WS_TICKET_MINTED, provider=sess.provider, user_id=sess.user_id)
     return {"ticket": ticket, "ttl_seconds": TTL_SECONDS}
 

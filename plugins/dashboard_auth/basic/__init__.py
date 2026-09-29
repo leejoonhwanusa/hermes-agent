@@ -1,8 +1,8 @@
 """BasicAuthProvider — username/password dashboard auth (no OAuth IDP).
 
 Login is a credential form (``supports_password`` + ``complete_password_login``); cookies,
-verify, refresh, ws-tickets and logout are the shared framework. Sessions are stateless
-HMAC-signed tokens (no IDP, no database); passwords use stdlib scrypt and login always hashes
+verify, refresh, ws-tickets and logout are the shared framework. HMAC-signed sessions are
+backed by a profile-local active-session file (no IDP or database); passwords use stdlib scrypt and login always hashes
 even for an unknown username (no username-enumeration timing oracle). Config: ``dashboard.
 basic_auth.{username,password_hash|password,secret,session_ttl_seconds}`` or the
 ``HERMES_DASHBOARD_BASIC_AUTH_*`` env vars (env wins when non-empty; see ``_settings``).
@@ -18,9 +18,12 @@ import logging
 import os
 import secrets
 import time
+from contextlib import contextmanager
 from typing import Optional
 
-from hermes_cli.dashboard_auth import DashboardAuthProvider, InvalidCredentialsError, RefreshExpiredError, Session
+from hermes_cli.dashboard_auth import DashboardAuthProvider, InvalidCredentialsError, ProviderError, RefreshExpiredError, Session
+from hermes_constants import get_hermes_home
+from utils import atomic_json_write
 from plugins.dashboard_auth._shared import (
     NonInteractiveMixin, SkipRegistration, load_config_section, register_provider, resolve_env_or_cfg)
 
@@ -112,11 +115,13 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
 # ---- Provider ----
 
 class BasicAuthProvider(NonInteractiveMixin, DashboardAuthProvider):
-    """Username/password provider with stateless HMAC-signed sessions."""
+    """Username/password provider with durable, individually revocable sessions."""
 
     name = "basic"
     display_name = "Username & Password"
     supports_password = True
+    cache_refresh_success = False
+    bind_ws_ticket_session = True
     _NOT_INTERACTIVE = "BasicAuthProvider is password-only; use complete_password_login."
     _NO_START_LOGIN = (
         "BasicAuthProvider is password-only; there is no OAuth redirect flow. "
@@ -133,6 +138,41 @@ class BasicAuthProvider(NonInteractiveMixin, DashboardAuthProvider):
         self._password_hash = password_hash
         self._secret = secret
         self._ttl = max(60, int(ttl_seconds))
+        self._sessions_path = get_hermes_home() / 'dashboard-basic-sessions.json'
+
+    @contextmanager
+    def _sessions(self):
+        from hermes_cli import auth
+
+        try:
+            if auth.fcntl is None and auth.msvcrt is None:
+                raise OSError('OS file locking unavailable')
+            with auth._auth_store_lock(target_path=self._sessions_path):
+                try:
+                    data = json.loads(self._sessions_path.read_text(encoding='utf-8'))
+                except FileNotFoundError:
+                    data = {}
+                if not isinstance(data, dict) or any(
+                    not isinstance(sid, str) or not isinstance(row, dict)
+                    or not isinstance(row.get('sub'), str) or type(row.get('exp')) is not int
+                    for sid, row in data.items()
+                ):
+                    raise ValueError('Invalid session store')
+                yield data
+        except (OSError, ValueError, TimeoutError) as exc:
+            raise ProviderError('Dashboard session store unavailable') from exc
+
+    def _save_sessions(self, data):
+        now = int(time.time())
+        atomic_json_write(self._sessions_path,
+                          {sid: row for sid, row in data.items() if row['exp'] > now},
+                          mode=0o600, fsync_dir=True)
+
+    def _active(self, data, payload):
+        sid = payload.get('sid')
+        row = data.get(sid) if isinstance(sid, str) else None
+        return (row is not None and row['sub'] == payload.get('sub') == self._username
+                and row['exp'] > int(time.time()))
 
     # ---- password login ----------------------------------------------------
 
@@ -144,7 +184,11 @@ class BasicAuthProvider(NonInteractiveMixin, DashboardAuthProvider):
         password_ok = _verify_password(password, self._password_hash if username_ok else _DUMMY_HASH)
         if not (username_ok and password_ok):
             raise InvalidCredentialsError("invalid username or password")
-        return self._mint_session(self._username)
+        with self._sessions() as data:
+            sid = secrets.token_urlsafe(32)
+            data[sid] = {'sub': self._username, 'exp': int(time.time()) + _REFRESH_TTL_SECONDS}
+            self._save_sessions(data)
+            return self._mint_session(self._username, sid)
 
     # ---- session lifecycle -------------------------------------------------
 
@@ -152,6 +196,9 @@ class BasicAuthProvider(NonInteractiveMixin, DashboardAuthProvider):
         payload = _unsign(access_token, self._secret, "access")
         if payload is None:
             return None
+        with self._sessions() as data:
+            if not self._active(data, payload):
+                return None
         return self._session(str(payload.get("sub", "")), int(payload["exp"]), access_token, "")
 
     def refresh_session(self, *, refresh_token: str) -> Session:
@@ -160,21 +207,42 @@ class BasicAuthProvider(NonInteractiveMixin, DashboardAuthProvider):
         payload = _unsign(refresh_token, self._secret, "refresh")
         if payload is None:
             raise RefreshExpiredError("refresh token expired or invalid")
-        return self._mint_session(str(payload.get("sub", self._username)))
+        with self._sessions() as data:
+            if not self._active(data, payload):
+                raise RefreshExpiredError('Session revoked or expired')
+            data[payload['sid']]['exp'] = int(time.time()) + _REFRESH_TTL_SECONDS
+            self._save_sessions(data)
+            return self._mint_session(self._username, payload['sid'])
 
     def revoke_session(self, *, refresh_token: str) -> None:
-        # Stateless tokens — nothing to revoke server-side; the session expires within its TTL. Must not raise.
-        return None
+        # Retain the legacy best-effort plugin contract; the logout route uses the
+        # strict logout_session entry point so storage failure cannot report success.
+        try:
+            self.logout_session(access_token='', refresh_token=refresh_token)
+        except ProviderError:
+            logger.warning('dashboard-auth-basic: session revocation unavailable')
+
+    def logout_session(self, *, access_token: str, refresh_token: str) -> None:
+        payloads = [_unsign(access_token, self._secret, 'access'),
+                    _unsign(refresh_token, self._secret, 'refresh')]
+        sids = {p['sid'] for p in payloads if p and p.get('sub') == self._username
+                and isinstance(p.get('sid'), str)}
+        if not sids:
+            return
+        with self._sessions() as data:
+            for sid in sids:
+                data.pop(sid, None)
+            self._save_sessions(data)
 
     # ---- internals ---------------------------------------------------------
 
-    def _mint_session(self, user_id: str) -> Session:
+    def _mint_session(self, user_id: str, sid: str) -> Session:
         now = int(time.time())
         exp = now + self._ttl
         return self._session(
             user_id, exp,
-            _sign({"sub": user_id, "kind": "access", "exp": exp}, self._secret),
-            _sign({"sub": user_id, "kind": "refresh", "exp": now + _REFRESH_TTL_SECONDS}, self._secret))
+            _sign({"sub": user_id, "sid": sid, "kind": "access", "exp": exp}, self._secret),
+            _sign({"sub": user_id, "sid": sid, "kind": "refresh", "exp": now + _REFRESH_TTL_SECONDS}, self._secret))
 
     def _session(self, user_id: str, exp: int, access_token: str, refresh_token: str) -> Session:
         return Session(

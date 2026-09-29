@@ -36,3 +36,54 @@ approved_profiles:
     timeout_seconds: 300
     execution_authority: read_only
     driver: process
+  dashboard_auth_regression:
+    description: Pinned PM regression for dashboard-auth sessions, provider lifecycle, WebSocket tickets, and display ownership.
+    interpreter: C:/Program Files/Git/usr/bin/bash.exe
+    command_argv:
+      - -c
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/plugins/dashboard_auth/test_basic_provider.py tests/hermes_cli/test_dashboard_auth_password_login.py tests/hermes_cli/test_refresh_singleflight.py tests/hermes_cli/test_dashboard_auth_ws_tickets.py tests/hermes_cli/test_dashboard_auth_ws_auth.py tests/hermes_cli/test_dashboard_auth_middleware.py tests/hermes_cli/test_dashboard_auth_plugin_hook.py tests/hermes_cli/test_web_server_idle_exit.py tests/hermes_cli/test_display_ws_ticket.py tests/hermes_cli/test_ws_auth_display_ticket.py tests/hermes_cli/test_display_ws_drop_keeps_lease.py tests/tui_gateway/test_display_methods.py -- -v --tb=short"
+    working_directory: .
+    timeout_seconds: 900
+    execution_authority: read_only
+    driver: process
+  dashboard_auth_ruff:
+    description: Scoped Ruff for current changed Python paths and the twelve selected dashboard-auth regression files.
+    interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
+    command_argv:
+      - check
+      - hermes_cli/dashboard_auth/base.py
+      - hermes_cli/dashboard_auth/refresh_singleflight.py
+      - hermes_cli/dashboard_auth/routes.py
+      - hermes_cli/dashboard_auth/ws_tickets.py
+      - hermes_cli/web_routers/display.py
+      - hermes_cli/web_server.py
+      - hermes_cli/web_server_chat.py
+      - plugins/dashboard_auth/basic/__init__.py
+      - tui_gateway/methods_display.py
+      - tui_gateway/ws.py
+      - tests/hermes_cli/test_dashboard_auth_password_login.py
+      - tests/hermes_cli/test_dashboard_auth_ws_auth.py
+      - tests/hermes_cli/test_dashboard_auth_ws_tickets.py
+      - tests/hermes_cli/test_display_ws_ticket.py
+      - tests/plugins/dashboard_auth/test_basic_provider.py
+      - tests/hermes_cli/test_refresh_singleflight.py
+      - tests/hermes_cli/test_dashboard_auth_middleware.py
+      - tests/hermes_cli/test_dashboard_auth_plugin_hook.py
+      - tests/hermes_cli/test_web_server_idle_exit.py
+      - tests/hermes_cli/test_ws_auth_display_ticket.py
+      - tests/hermes_cli/test_display_ws_drop_keeps_lease.py
+      - tests/tui_gateway/test_display_methods.py
+    working_directory: .
+    timeout_seconds: 300
+    execution_authority: read_only
+    driver: process
+  dashboard_auth_windows_regression:
+    description: Windows-scoped dashboard-auth regression retaining the twelve-file selection while excluding seven POSIX-only test instances.
+    interpreter: C:/Program Files/Git/usr/bin/bash.exe
+    command_argv:
+      - -c
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/plugins/dashboard_auth/test_basic_provider.py tests/hermes_cli/test_dashboard_auth_password_login.py tests/hermes_cli/test_refresh_singleflight.py tests/hermes_cli/test_dashboard_auth_ws_tickets.py tests/hermes_cli/test_dashboard_auth_ws_auth.py tests/hermes_cli/test_dashboard_auth_middleware.py tests/hermes_cli/test_dashboard_auth_plugin_hook.py tests/hermes_cli/test_web_server_idle_exit.py tests/hermes_cli/test_display_ws_ticket.py tests/hermes_cli/test_ws_auth_display_ticket.py tests/hermes_cli/test_display_ws_drop_keeps_lease.py tests/tui_gateway/test_display_methods.py -- -v --tb=short -k 'not (test_only_a_clean_viewer_close_hands_the_screen_back or test_a_takeover_made_by_another_process_stops_input_within_the_refresh_interval or test_no_bridge_task_or_socket_outlives_the_bridge or test_install_worker_keeps_the_requested_profile_scope or test_install_sudo_card_ignores_a_client_supplied_session_id)'"
+    working_directory: .
+    timeout_seconds: 900
+    execution_authority: read_only
+    driver: process

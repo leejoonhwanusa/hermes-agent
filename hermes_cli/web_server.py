@@ -1231,6 +1231,9 @@ def _build_uvicorn_server(host: str, port: int, *, ssh_isolated: bool = False):
         served_app = wrap_asgi_with_ws_tracking(app, app.state.ssh_isolated_clients)
         ping_interval, ping_timeout = TUNNEL_WS_PING_INTERVAL_S, TUNNEL_WS_PING_TIMEOUT_S
 
+    from hermes_cli.dashboard_auth.ws_tickets import wrap_asgi_with_ws_sessions
+    served_app = wrap_asgi_with_ws_sessions(served_app)
+
     config = uvicorn.Config(
         served_app, host=host, port=port, log_level="warning",
         # Off by default so _ws_client_is_allowed sees the real peer, not

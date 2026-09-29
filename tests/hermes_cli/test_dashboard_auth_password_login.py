@@ -168,6 +168,45 @@ def gated_app(pw_provider):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize('failure', [False, True])
+def test_basic_logout_replay_and_write_failure(gated_app, monkeypatch, failure):
+    import plugins.dashboard_auth.basic as basic
+    from hermes_cli.dashboard_auth.ws_tickets import consume_ticket, TicketInvalid
+
+    clear_providers()
+    provider = basic.BasicAuthProvider(username='admin', password_hash=basic.hash_password('hunter2'),
+                                        secret=b'test-revocation-secret-32-bytes!!!')
+    register_provider(provider)
+    assert gated_app.post('/auth/password-login', json={
+        'provider': 'basic', 'username': 'admin', 'password': 'hunter2'}).status_code == 200
+    cookies = dict(gated_app.cookies)
+    rt = cookies['__Host-' + SESSION_RT_COOKIE]
+    assert gated_app.get('/api/auth/me').status_code == 200
+    ticket_response = gated_app.post('/api/auth/ws-ticket')
+    assert ticket_response.status_code == 200
+    ticket = ticket_response.json()['ticket']
+    # Exercise the shared refresh cache before logout, then replay the same RT.
+    assert gated_app.post('/auth/native/refresh', json={
+        'provider': 'basic', 'refresh_token': rt}).status_code == 200
+    if failure:
+        def denied(*args, **kwargs):
+            raise OSError('simulated disk failure')
+        monkeypatch.setattr(basic, 'atomic_json_write', denied)
+    logout = gated_app.post('/auth/logout', follow_redirects=False)
+    assert logout.status_code == (503 if failure else 302)
+    if failure:
+        assert 'set-cookie' not in logout.headers
+        assert provider.verify_session(access_token=cookies['__Host-' + SESSION_AT_COOKIE]) is not None
+        return
+    gated_app.cookies.clear()
+    gated_app.cookies.update(cookies)
+    assert gated_app.get('/api/auth/me').status_code == 401
+    assert gated_app.post('/auth/native/refresh', json={
+        'provider': 'basic', 'refresh_token': rt}).status_code == 401
+    with pytest.raises(TicketInvalid):
+        consume_ticket(ticket)
+
+
 class TestProtocolExtension:
 
 

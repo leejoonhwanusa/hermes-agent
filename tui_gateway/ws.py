@@ -103,6 +103,8 @@ class WSTransport:
         #: for legacy-token/stdio. RPC params can never populate it: sole identity authority for browser controllers
         #: and for the ``user_id`` the agent is built with (``server._session_auth_user_id``).
         self.auth_identity = auth_identity
+        # Private server-only authority inherited by derived display tickets.
+        self._dashboard_session_binding = getattr(ws, "scope", {}).get("_hermes_ws_session_binding")
         self._closed = False
         # Token-coalescing buffer. The lock guards the buffer + "armed" flag against worker threads
         # calling write(); the timer handle is only ever touched on the loop thread.

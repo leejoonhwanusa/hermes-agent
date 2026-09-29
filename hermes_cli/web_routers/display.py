@@ -63,7 +63,7 @@ def _consume_display_ticket(ws: WebSocket) -> Optional[dict]:
     if not ticket:
         return None
     try:
-        info = consume_ticket(ticket)
+        info = consume_ticket(ticket, scope=getattr(ws, "scope", None))
     except TicketInvalid:
         return None
     if info.get("provider") != "bot-desktop" or not info.get("hermes_home"):
@@ -214,17 +214,18 @@ async def _bridge(ws: WebSocket, info: dict) -> None:
     tasks = [asyncio.create_task(rfb_to_ws()), asyncio.create_task(ws_to_rfb()),
              asyncio.create_task(watch_eviction())]
     try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for t in pending:
-            t.cancel()
-        # Cancelled pumps must finish before we tear down the socket they hold, or they outlive the
-        # bridge on the loop (a viewer reconnecting in a loop piled them up).
-        await asyncio.gather(*pending, return_exceptions=True)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in done:
             exc = t.exception()
             if exc and not isinstance(exc, (WebSocketDisconnect, ConnectionError)):
                 _log.debug("display ws ended: %r", exc)
     finally:
+        # Logout may cancel the bridge while wait() is suspended. Reap pumps on
+        # every exit before closing the resources they still reference.
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         unsubscribe()
         writer.close()
         try:

@@ -64,7 +64,8 @@ def _refresh_provider(provider: DashboardAuthProvider, token: str) -> Session | 
         with flight.lock:
             with _guard:
                 cached = _cache.get(key)
-                if cached is not None and cached[0] > time.monotonic():
+                if (cached is not None and cached[0] > time.monotonic()
+                        and (cached[2] is None or provider.cache_refresh_success)):
                     return cached[2]
             try:
                 session = provider.refresh_session(refresh_token=token)
@@ -73,7 +74,10 @@ def _refresh_provider(provider: DashboardAuthProvider, token: str) -> Session | 
             # ProviderError and unexpected execution failures are deliberately not cached.
             with _guard:
                 now = time.monotonic()
-                _cache[key] = (now + (_SUCCESS_TTL if session is not None else _FAILURE_TTL), provider, session)
+                if session is None or provider.cache_refresh_success:
+                    _cache[key] = (now + (_SUCCESS_TTL if session is not None else _FAILURE_TTL), provider, session)
+                else:
+                    _cache.pop(key, None)
                 _prune(now)
             return session
     finally:

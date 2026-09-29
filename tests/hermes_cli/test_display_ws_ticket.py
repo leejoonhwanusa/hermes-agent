@@ -12,6 +12,95 @@ class _Ws:
         self.query_params = params
 
 
+def test_display_observe_inherits_basic_logout_for_pending_and_idle_sockets(monkeypatch, tmp_path):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    import pytest
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from hermes_cli import web_server, web_server_chat
+    from hermes_cli.dashboard_auth import clear_providers, register_provider
+    from hermes_constants import get_hermes_home
+    from plugins.dashboard_auth.basic import BasicAuthProvider, hash_password
+    from tools.bot_desktop import runtime
+    from tui_gateway import server
+    from tui_gateway.ws import WSTransport
+
+    clear_providers()
+    ws_tickets._reset_for_tests()
+    register_provider(BasicAuthProvider(username="admin", password_hash=hash_password("hunter2"),
+                                        secret=b"test-display-revocation-secret!!!"))
+    monkeypatch.setattr(web_server.app.state, "auth_required", True, raising=False)
+    monkeypatch.setattr(web_server.app.state, "bound_host", "fly-app.fly.dev", raising=False)
+    monkeypatch.setattr(web_server.app.state, "bound_port", 443, raising=False)
+    monkeypatch.setattr(runtime, "rfb_socket_path", lambda: tmp_path / "rfb.sock")
+
+    cleaned = threading.Event()
+    expected_home = get_hermes_home()
+
+    async def open_rfb(profile_home):
+        assert profile_home == expected_home
+        class Reader:
+            started = False
+            cancelled = False
+
+            async def read(self, size):
+                if not self.started:
+                    self.started = True
+                    return b"RFB 003.008\n"
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.cancelled = True
+
+        reader = Reader()
+
+        class Writer:
+            def close(self):
+                assert reader.cancelled
+
+            async def wait_closed(self):
+                cleaned.set()
+
+        return reader, Writer(), None
+
+    monkeypatch.setattr(display, "_open_rfb", open_rfb)
+    config, _ = web_server._build_uvicorn_server("fly-app.fly.dev", 443)
+    client = TestClient(config.app, base_url="https://fly-app.fly.dev")
+    loop = asyncio.new_event_loop()
+    try:
+        assert client.post("/auth/password-login", json={
+            "provider": "basic", "username": "admin", "password": "hunter2",
+        }).status_code == 200
+        parent = client.post("/api/auth/ws-ticket").json()["ticket"]
+        ws = SimpleNamespace(scope={}, query_params={"ticket": parent}, headers={})
+        assert web_server_chat._ws_auth_ok(ws)
+        transport = WSTransport(ws, loop, auth_identity=ws._hermes_auth_identity)
+        tickets = []
+        for rid in (1, 2):
+            result = server.dispatch({"jsonrpc": "2.0", "id": rid,
+                                      "method": "display.observe", "params": {}}, transport)
+            tickets.append(result["result"]["ticket"])
+        with client.websocket_connect(
+                f"wss://fly-app.fly.dev/api/display/ws?display_ticket={tickets[0]}") as viewer:
+            assert viewer.receive_bytes() == b"RFB 003.008\n"
+            assert client.post("/auth/logout", follow_redirects=False).status_code == 302
+            with pytest.raises(ws_tickets.TicketInvalid):
+                ws_tickets.consume_ticket(tickets[1])
+            with pytest.raises(WebSocketDisconnect) as disconnected:
+                viewer.receive_text()
+            assert disconnected.value.code == 4401
+            assert cleaned.wait(5), "RFB pumps and socket must be reaped after logout"
+    finally:
+        client.close()
+        loop.close()
+        clear_providers()
+        ws_tickets._reset_for_tests()
+
+
 def test_display_ticket_must_be_a_bot_desktop_ticket_pinned_to_a_profile_home(monkeypatch):
     ws_tickets._reset_for_tests()
     gateway_ticket = ws_tickets.mint_ticket(user_id="u", provider="google")

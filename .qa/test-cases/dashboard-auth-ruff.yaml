@@ -1,0 +1,26 @@
+test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-RUFF
+project_id: hermes-agent
+title: Installed Agent dashboard authentication scoped Ruff
+purpose: Check style for the current changed Python paths and the twelve selected dashboard-auth regression files.
+preconditions:
+  - Use the registered contract and its pinned existing PM test generation.
+steps:
+  - Run dashboard_auth_ruff through the registered process profile.
+expected_results:
+  - Scoped Ruff exits successfully with source-bound stdout Evidence.
+requirement_refs: [AGENTS.md, .qa/contract.yaml]
+risk: high
+tags: [regression, static, auth, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 1
+created_at: '2026-09-29T09:02:44+00:00'
+updated_at: '2026-09-29T09:02:44+00:00'
+automation_bindings:
+  - binding_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-RUFF-PROFILE
+    test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-RUFF
+    project_id: hermes-agent
+    driver: process
+    profile_name: dashboard_auth_ruff
+    timeout_seconds: 300

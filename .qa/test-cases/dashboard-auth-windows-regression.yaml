@@ -1,0 +1,28 @@
+test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-WINDOWS-REGRESSION
+project_id: hermes-agent
+title: Installed Agent dashboard authentication Windows regression
+purpose: Run the selected dashboard-auth source checks on Windows while excluding only seven test instances that require POSIX-only APIs.
+preconditions:
+  - Use the registered contract and its pinned existing PM test generation on Windows.
+  - Preserve all twelve selected test files and the existing clean process environment.
+steps:
+  - Run dashboard_auth_windows_regression through the registered process profile.
+expected_results:
+  - All Windows-applicable selected checks pass with source-bound stdout Evidence.
+  - The filter excludes only the five declared test functions, expanding to seven POSIX-only instances, while retaining pure lease/observe and native-bridge logout-revocation coverage.
+requirement_refs: [AGENTS.md, .qa/contract.yaml, .qa/README.md, C:/Project/Hanil-QA/AGENTS.md]
+risk: high
+tags: [regression, auth, windows, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 1
+created_at: '2026-09-29T09:27:51+00:00'
+updated_at: '2026-09-29T09:27:51+00:00'
+automation_bindings:
+  - binding_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-WINDOWS-REGRESSION-PROFILE
+    test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-WINDOWS-REGRESSION
+    project_id: hermes-agent
+    driver: process
+    profile_name: dashboard_auth_windows_regression
+    timeout_seconds: 900

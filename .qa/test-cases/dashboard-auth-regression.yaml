@@ -1,0 +1,28 @@
+test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-REGRESSION
+project_id: hermes-agent
+title: Installed Agent dashboard authentication regression
+purpose: Verify dashboard-auth session, provider, WebSocket ticket, and display ownership invariants through pinned source tests without touching the live listener.
+preconditions:
+  - Use the registered contract and its pinned existing PM test generation.
+  - Keep test credentials synthetic and use the existing clean test process environment.
+steps:
+  - Run dashboard_auth_regression through the registered process profile.
+expected_results:
+  - All twelve selected isolated checks pass with source-bound stdout Evidence.
+  - Source coverage preserves cookie-backed session continuity, accepted WebSocket liveness, and parent-bound display-ticket revocation.
+requirement_refs: [AGENTS.md, .qa/contract.yaml, C:/Project/Hanil-QA/AGENTS.md]
+risk: high
+tags: [regression, auth, websocket, read-only]
+platforms: [windows]
+owner: qa
+lifecycle: active
+revision: 2
+created_at: '2026-09-29T09:02:44+00:00'
+updated_at: '2026-09-29T09:02:44+00:00'
+automation_bindings:
+  - binding_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-REGRESSION-PROFILE
+    test_case_id: HQ-HERMES-AGENT-DASHBOARD-AUTH-REGRESSION
+    project_id: hermes-agent
+    driver: process
+    profile_name: dashboard_auth_regression
+    timeout_seconds: 900
