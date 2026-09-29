@@ -19,6 +19,7 @@ Proves, on windows-latest:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import queue
@@ -35,6 +36,42 @@ from tests.live_process_fixtures import sleeper_script_path
 pytestmark = pytest.mark.platforms("windows")  # live Windows named-pipe E2E
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_unresponsive_pipe_obeys_deadline_and_releases_client(tmp_path):
+    from gateway.control_socket import identify_gateway, windows_pipe_name
+
+    async def scenario():
+        transports = []
+
+        class SilentPeer(asyncio.Protocol):
+            def connection_made(self, transport):
+                transports.append(transport)
+
+        loop = asyncio.get_running_loop()
+        servers = await loop.start_serving_pipe(SilentPeer, windows_pipe_name(tmp_path))
+        # Bound the broken baseline too: closing the peer releases a blocking read.
+        async def release_peer():
+            await asyncio.sleep(2)
+            for transport in transports:
+                transport.close()
+
+        release = asyncio.create_task(release_peer())
+        started = time.monotonic()
+        try:
+            result = await asyncio.to_thread(identify_gateway, tmp_path, timeout=0.15)
+            elapsed = time.monotonic() - started
+            assert result is None
+            assert elapsed < 1.5, f"pipe read ignored deadline: {elapsed:.2f}s"
+        finally:
+            release.cancel()
+            await asyncio.gather(release, return_exceptions=True)
+            for transport in transports:
+                transport.close()
+            for server in servers:
+                server.close()
+
+    asyncio.run(scenario())
 
 
 def _wait_until(predicate, timeout: float = 15.0, interval: float = 0.05) -> bool:

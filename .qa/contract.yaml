@@ -19,19 +19,19 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Canonical isolated regression for Gateway loop liveness and shutdown watchdog behavior.
+    description: Canonical isolated regression for Gateway profile ownership and bounded Windows control-pipe I/O.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec scripts/run_tests.sh tests/gateway/test_loop_liveness_watchdog.py tests/gateway/test_shutdown_watchdog.py"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_multiplex_hot_serve.py tests/gateway/test_control_socket_windows_live.py tests/gateway/test_host_attach_lifecycle.py tests/gateway/test_host_attach_standalone.py -- -v --tb=short"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for the shutdown watchdog source and its two affected Gateway tests.
+    description: Scoped Ruff for profile reconciliation and Windows control-pipe changes.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
-    command_argv: [check, gateway/shutdown_watchdog.py, tests/gateway/test_loop_liveness_watchdog.py, tests/gateway/test_shutdown_watchdog.py]
+    command_argv: [check, gateway/run_profile_reconcile.py, gateway/control_socket.py, tests/gateway/test_multiplex_hot_serve.py, tests/gateway/test_control_socket_windows_live.py]
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

@@ -316,25 +316,57 @@ def _query_unix_socket(home: Path, request: bytes, timeout: float) -> Optional[b
 
 
 def _query_windows_pipe(home: Path, request: bytes, timeout: float) -> Optional[bytes]:  # pragma: no cover - wine2e lane
+    import _winapi
+
     pipe_name = windows_pipe_name(home)
     deadline = time.monotonic() + timeout
     handle = None
     while handle is None:
+        if time.monotonic() >= deadline:
+            return None
         try:
-            handle = open(pipe_name, "r+b", buffering=0)
+            handle = _winapi.CreateFile(
+                pipe_name, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
+                0, None, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED, 0,
+            )
         except FileNotFoundError:
             return None
         except OSError:
             # Pipe busy (another client mid-handshake) — brief retry window.
             if time.monotonic() >= deadline:
                 return None
-            time.sleep(0.05)
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+    def complete(operation, error):
+        # A Python deadline around a blocking read cannot interrupt Windows I/O.
+        # Overlapped operations can be cancelled and reaped before closing the handle.
+        try:
+            if error == _winapi.ERROR_IO_PENDING:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or _winapi.WaitForSingleObject(
+                    operation.event, max(1, int(remaining * 1000)),
+                ) != _winapi.WAIT_OBJECT_0:
+                    raise TimeoutError("Gateway control pipe deadline expired")
+            count, error = operation.GetOverlappedResult(False)
+            if error:
+                raise OSError(error, "Gateway control pipe I/O failed")
+            return count
+        except BaseException:
+            operation.cancel()
+            operation.GetOverlappedResult(True)
+            raise
+
+    def read():
+        operation, error = _winapi.ReadFile(handle, 65536, overlapped=True)
+        complete(operation, error)
+        return bytes(operation.getbuffer())
+
     try:
-        handle.write(request)
-        return _read_response_line(lambda: handle.read(65536), deadline)
+        if complete(*_winapi.WriteFile(handle, request, overlapped=True)) != len(request):
+            return None
+        return _read_response_line(read, deadline)
     finally:
-        with contextlib.suppress(Exception):
-            handle.close()
+        _winapi.CloseHandle(handle)
 
 
 def identify_gateway(home: Path, *, timeout: float = _DEFAULT_CLIENT_TIMEOUT) -> Optional[dict[str, Any]]:

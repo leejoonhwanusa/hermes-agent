@@ -113,7 +113,9 @@ class GatewayProfileReconcileMixin:
             for name in list(current):
                 if name == active or name in known:
                     continue
-                if live_gateway_pid_for_home(current[name]) is not None:
+                # Ownership may query this gateway's own control socket. Keep the
+                # loop free to answer it while retaining the live identity checks.
+                if await asyncio.to_thread(live_gateway_pid_for_home, current[name]) is not None:
                     blocked.add(name)
                     if name not in warned:
                         logger.warning("[MULTIPLEX] Profile '%s' still runs its own gateway; "

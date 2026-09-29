@@ -7,6 +7,7 @@ profiles' live adapters. The cron ticker's live enumerator is covered in ``tests
 """
 import asyncio
 import json
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -78,6 +79,25 @@ def _mkprofile(home, name, env=""):
 def _served_record(home):
     flush_runtime_status()
     return json.loads((home / "gateway_state.json").read_text(encoding="utf-8")).get("served_profiles")
+
+
+@pytest.mark.asyncio
+async def test_ownership_probe_leaves_loop_free_to_answer(tmp_path, monkeypatch):
+    runner, home = _runner(tmp_path, monkeypatch)
+    runner._note_served_profiles([("default", home)])
+    _mkprofile(home, "new")
+    loop = asyncio.get_running_loop()
+    answered = threading.Event()
+
+    def probe(_home):
+        loop.call_soon_threadsafe(answered.set)
+        assert answered.wait(2), "ownership probe blocked its own gateway event loop"
+        return 12345
+
+    monkeypatch.setattr("gateway.status.live_gateway_pid_for_home", probe)
+    result = await runner.reconcile_served_profiles()
+    assert result["added"] == []
+    assert runner._started == []
 
 
 @pytest.mark.asyncio
