@@ -926,7 +926,9 @@ def _gateway_run_args_for_profile(profile: str) -> list[str]:
     args = []
     if profile != "default":
         args.extend(["--profile", profile])
-    args.extend(["gateway", "run", "--replace"])
+    # Windows updates must return to the registered Task's supervisor. The
+    # canonical start command also retains direct spawning for uninstalled profiles.
+    args.extend(["gateway", "start"] if sys.platform == "win32" else ["gateway", "run", "--replace"])
     return runtime_command(PROJECT_ROOT, args)
 
 
@@ -983,7 +985,7 @@ def launch_detached_gateway_restart_by_cmdline(old_pid: int, run_argv: list[str]
 
 
 def launch_detached_profile_gateway_restart(profile: str, old_pid: int) -> bool:
-    """Relaunch a manually-run profile gateway after its current PID exits."""
+    """Relaunch after the old PID exits, retaining Windows profile service ownership."""
     return old_pid > 0 and _spawn_gateway_restart_watcher(
         old_pid,
         _gateway_run_args_for_profile(profile),
@@ -5737,4 +5739,3 @@ def _pm_runtime_venv_dir(project_root: Path | None = None) -> Path | None:
 
     venv = selected_venv(root)  # a malformed committed selection raises: fail closed
     return venv if venv.is_dir() else None
-

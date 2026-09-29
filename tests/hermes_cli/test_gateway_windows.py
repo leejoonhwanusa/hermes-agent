@@ -808,6 +808,25 @@ def _arrange_uninstalled_start(monkeypatch):
     return installs, spawns
 
 
+@pytest.mark.parametrize("profile", ["default", "worker"])
+@pytest.mark.platforms("windows")
+def test_update_restart_returns_to_profile_lifecycle(monkeypatch, profile):
+    from hermes_cli import gateway
+
+    calls = []
+    monkeypatch.setattr(
+        gateway, "_spawn_gateway_restart_watcher",
+        lambda old_pid, argv, **kwargs: calls.append((old_pid, argv, kwargs)) or True,
+    )
+    assert gateway.launch_detached_profile_gateway_restart(profile, 12345)
+    old_pid, argv, kwargs = calls.pop()
+    assert old_pid == 12345
+    assert argv[-2:] == ["gateway", "start"]
+    assert kwargs["host"] is (profile == "default")
+    if profile != "default":
+        assert argv[-4:-2] == ["--profile", profile]
+
+
 def test_start_uses_registered_task_for_supervised_gateway(monkeypatch, tmp_path):
     """A registered Task must own the launched Gateway; a direct spawn cannot propagate a later
     watchdog exit to Task Scheduler's RestartOnFailure policy."""

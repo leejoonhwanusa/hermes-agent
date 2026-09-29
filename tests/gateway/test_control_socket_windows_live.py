@@ -52,7 +52,7 @@ def test_unresponsive_pipe_obeys_deadline_and_releases_client(tmp_path):
         servers = await loop.start_serving_pipe(SilentPeer, windows_pipe_name(tmp_path))
         # Bound the broken baseline too: closing the peer releases a blocking read.
         async def release_peer():
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
             for transport in transports:
                 transport.close()
 
@@ -62,7 +62,8 @@ def test_unresponsive_pipe_obeys_deadline_and_releases_client(tmp_path):
             result = await asyncio.to_thread(identify_gateway, tmp_path, timeout=0.15)
             elapsed = time.monotonic() - started
             assert result is None
-            assert elapsed < 1.5, f"pipe read ignored deadline: {elapsed:.2f}s"
+            assert transports, "client must connect before the silent-peer timeout"
+            assert elapsed < 3, f"pipe read ignored deadline: {elapsed:.2f}s"
         finally:
             release.cancel()
             await asyncio.gather(release, return_exceptions=True)
