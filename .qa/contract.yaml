@@ -19,11 +19,11 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Canonical isolated regression for Gateway profile ownership and bounded Windows control-pipe I/O.
+    description: Focused real Windows control-pipe recheck after fixture readiness correction; broader unchanged source checks are retained in the preceding Run.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_multiplex_hot_serve.py tests/gateway/test_control_socket_windows_live.py tests/gateway/test_host_attach_lifecycle.py tests/gateway/test_host_attach_standalone.py tests/hermes_cli/test_gateway_windows.py tests/hermes_cli/test_windows_update_restart_reconciliation.py tests/hermes_cli/test_gateway_external_supervisor.py -- -v --tb=short -k 'not test_exec_schtasks_round_trips_non_ascii_task_argument_live'"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_control_socket_windows_live.py -- -v --tb=short"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only

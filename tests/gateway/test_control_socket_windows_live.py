@@ -104,13 +104,17 @@ def _argv_visible(pid: int, marker: str) -> bool:
         return False
 
 _CHILD_CODE = r"""
-import asyncio, os, sys
+import asyncio, json, os, sys
 sys.path.insert(0, sys.argv[1])
 os.environ["HERMES_HOME"] = sys.argv[2]
 from gateway.control_socket import GatewayControlServer
 
 async def main():
     server = GatewayControlServer()
+    # Advertise a ready handler, not just a bound pipe: its first identify
+    # imports runtime metadata lazily, independently of the transport deadline.
+    warm = json.loads(server.handle_request_line(b'{"verb":"identify"}'))
+    assert warm.get("ok") is True, warm
     ok = await server.start()
     # Print our REAL pid: on Windows uv venvs, python.exe is a trampoline
     # that spawns the actual interpreter as a child, so Popen.pid is the
