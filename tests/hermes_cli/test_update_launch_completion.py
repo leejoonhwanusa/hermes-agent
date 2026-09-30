@@ -356,10 +356,13 @@ def test_long_source_completion_does_not_start_another_tail(tmp_path, monkeypatc
     "ready", "relaunch", "stale", "pending", "missing", "corrupt", "error",
     "worker-success", "worker-error", "worker-corrupt", "worker-no-response",
     "worker-late-response", "worker-default",
+    "worker-prepare-lock", "worker-validation-timeout", "worker-validation-error",
+    "worker-prepare-lease", "worker-spawn-delay", "worker-cleanup-delay",
+    "worker-chain-ready", "worker-activation-lease", "worker-validation-spawn-delay",
     "activation-ready", "activation-lock", "activation-journal-race",
     "activation-facts-race", "activation-lease-race", "activation-input-race", "activation-default",
 ])
-def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, case):
+def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, case, record_property):
     """Exact status never starts maintenance; its canonical probe owns a finite budget."""
     import io
     import pm
@@ -434,12 +437,107 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
         return
     if case.startswith("worker-"):
         client = pm.client
+        import time
+        from pm import paths, runtime
+        from pm.lock import Lockfile
+        from pm.registry import get_package
+        from pm.store import current_target
+        from pm.environments import activate_dependencies, activation_input_mtimes, store_root, venv_python
+        from pm.install import venv_is_current as canonical_currency
+        from pm.packages import Venv
+        from hermes_cli import runtime_state
+
+        # Real resolver/prepare chain; only leaf process/clock/kernel locks are simulated.
+        # Existing home override selects exclusively temporary PM/application metadata.
+        tools = store_root(root)
+        tools.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("HERMES_RUNTIME_DIR", str(tools))
+        pin = Lockfile(paths.lockfile_path())
+        target = current_target()
+        tool_facts = {}
+        for name in ("uv", "python"):
+            package = get_package(name)
+            entry = tools / name
+            binary = package.binary(entry, target)
+            assert binary is not None
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.touch(mode=0o755)
+            tool_facts[name] = {"entry": name, "version": pin.version(name), "target": target,
+                                "artifacts": [a["sha256"] for a in pin.artifacts(name, target)]}
+        (tools / "facts.json").write_text(json.dumps({"schema": 1, "packages": tool_facts}))
+        python = get_package("python").binary(tools / "python", target)
+        assert python is not None
+        pm_state = install_state_dir(paths.repo_root()) / "pm-runtime"
+        pm_generation = pm_state / "generations" / "fixture"
+        pm_generation.mkdir(parents=True)
+        (pm_generation / "pm-runtime.json").write_text("{}")
+        (pm_generation / ".lease-managed").touch()
+        pm_python = venv_python(pm_generation)
+        pm_python.parent.mkdir(parents=True, exist_ok=True)
+        pm_python.touch()
+        identity = runtime._inputs(Path(runtime.__file__).parent, python)
+        (pm_state / "selected.json").write_text(json.dumps({"inputs": identity, "generation": "generations/fixture"}))
+        monkeypatch.setattr(runtime, "_HELD", {})
+        app = install_state_dir(root) / "environments" / "fixture" / "venv"
+        app.mkdir(parents=True)
+        (app / "pyvenv.cfg").write_text("version = 3.14.7\n")
+        (app.parent / ".lease-managed").touch()
+        site_packages(app).mkdir(parents=True)
+        (root / "uv.lock").write_text("version = 1\n")
+        (Path(os.environ["HERMES_HOME"]) / "config.yaml").write_text("plugins:\n  enabled: []\nmemory:\n  provider: none\n")
+        stamp = Venv(root).expected_stamp([])
+        facts = runtime_facts_path(root)
+        facts.write_text(json.dumps({"schema": 1, "packages": {"venv": {
+            "environment": str(app), "stamp": stamp, "extras": []}}}))
+        snapshot, inputs = facts.read_bytes(), activation_input_mtimes(root)
         now = [0.0]
         events = []
-        accepted = []
         class Wire(io.StringIO):
             def readline(self, size: int = -1, /) -> str:
                 return process.readline()
+        phases = {"validated": False, "worker": False, "activation_lock": False}
+        def os_lock(fd, mode, size=None):
+            if os.name == "nt":
+                import msvcrt
+                if mode == msvcrt.LK_UNLCK:
+                    return
+            if phases["worker"] and not phases["activation_lock"]:
+                phases["activation_lock"] = True
+                events.append(("lock", "activation-publication"))
+                return
+            phase = "activation-lease" if phases["worker"] else ("prepare-lease" if phases["validated"] else "prepare-lock")
+            if case == "worker-" + phase:
+                import errno
+                raise BlockingIOError(errno.EACCES, "fixture lock contention")
+            events.append(("lock", phase))
+        if os.name == "nt":
+            import msvcrt
+            monkeypatch.setattr(msvcrt, "locking", os_lock)
+        else:
+            import fcntl
+            monkeypatch.setattr(fcntl, "flock", os_lock)
+        monkeypatch.setattr(time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+        class Validation:
+            returncode = None
+            transport: io.TextIOWrapper
+            def poll(self): return self.returncode
+            def kill(self):
+                events.append(("validation-kill", None))
+                self.returncode = -9
+            def wait(self, timeout=None):
+                events.append(("validation-wait", timeout))
+                if self.returncode == -9:
+                    now[0] += 0.25
+                    return -9
+                assert timeout is not None
+                if case == "worker-validation-timeout":
+                    now[0] += timeout
+                    raise subprocess.TimeoutExpired("fixture validation", timeout)
+                now[0] += 0.5
+                self.returncode = 1 if case == "worker-validation-error" else 0
+                phases["validated"] = True
+                return self.returncode
+        validation = Validation()
         class Process:
             returncode = None
             def __init__(self):
@@ -448,7 +546,7 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
             def response(self, message):
                 if case == "worker-corrupt":
                     return "invalid JSON"
-                result = {"id": message["id"], "type": "result", "result": True}
+                result = {"id": message["id"], "type": "result", "result": canonical_currency(project_root=root)}
                 if case == "worker-error":
                     result["error"] = {"type": "ValueError", "message": "fixture corrupt facts"}
                 return json.dumps(result) + "\n"
@@ -467,11 +565,13 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
                     return 0
                 assert timeout is not None
                 if self.returncode == -9:
-                    now[0] += 0.25
+                    delay = 0.9 if case == "worker-cleanup-delay" else 0.25
+                    assert delay <= timeout
+                    now[0] += delay
                     return -9
                 self.message = json.load(self.stdin)
                 assert self.message["operation"] == "venv_is_current"
-                if case == "worker-no-response":
+                if case in {"worker-no-response", "worker-cleanup-delay"}:
                     now[0] += timeout
                     raise subprocess.TimeoutExpired("fixture worker", timeout)
                 if case == "worker-late-response":
@@ -488,43 +588,87 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
 
         process = Process()
         monkeypatch.setattr(client.time, "monotonic", lambda: now[0])
-        monkeypatch.setattr(client, "is_runtime", lambda: False)
-        monkeypatch.setattr(client, "runtime_environment", lambda: {})
-        def command(spec, *args):
-            assert spec.bootstrap == "never"
-            return ["fixture worker"]
-        monkeypatch.setattr(client, "_worker_command", command)
-        def popen(*args, **kwargs):
+        def popen(command, **kwargs):
+            if "-c" in command and "import packaging" in command[command.index("-c") + 1]:
+                events.append(("validation-spawn", None))
+                if case == "worker-validation-spawn-delay":
+                    now[0] += 9
+                validation.transport = kwargs["stderr"]
+                return validation
+            assert Path(command[0]) == pm_python
+            phases["worker"] = True
+            events.append(("worker-spawn", None))
+            if case == "worker-spawn-delay":
+                now[0] += 9
             if case != "worker-default":
                 process.stdin, process.stdout = kwargs["stdin"], kwargs["stdout"]
             return process
         monkeypatch.setattr(client.subprocess, "Popen", popen)
-        monkeypatch.setattr(pm.registry, "package_definitions", lambda names: [])
-        monkeypatch.setattr(pm.receipt, "_ambient_update_id", lambda: None)
-        monkeypatch.setattr(pm.receipt, "accept_worker_receipt", lambda *a: accepted.append(a))
-        if case == "worker-default":
-            assert client.venv_is_current(project_root=root)
-            assert events == [("readline", None), ("wait", 5)]
-        else:
-            error = {"worker-error": ValueError, "worker-corrupt": ValueError,
-                     "worker-no-response": TimeoutError, "worker-late-response": TimeoutError}.get(case)
-            if error:
-                with pytest.raises(error):
-                    client.venv_is_current(project_root=root, timeout=10)
+        def run(command, **kwargs):
+            assert case == "worker-default" and kwargs["timeout"] == 30
+            phases["validated"] = True
+            events.append(("default-validation", 30))
+            return subprocess.CompletedProcess(command, 0, "", "")
+        monkeypatch.setattr(runtime.subprocess, "run", run)
+        try:
+            if case == "worker-default":
+                assert client.venv_is_current(project_root=root)
+                assert ("readline", None) in events and ("wait", 5) in events
+                assert ("validation-wait", 30) not in events  # Default validation uses subprocess.run below.
             else:
-                assert client.venv_is_current(project_root=root, timeout=10)
-            assert events[0] == ("wait", 9)
-            assert ("readline", None) not in events and ("wait", 5) not in events
-            if case == "worker-no-response":
-                assert events == [("wait", 9), ("kill", None), ("wait", 1)]
-                assert now[0] == 9.25
-            if case == "worker-late-response":
-                assert not accepted
-            assert process.stdin.closed and process.stdout.closed
-            for stream in (process.stdin, process.stdout):
-                if isinstance(stream.name, str):
-                    assert not Path(stream.name).exists()
-            assert process.poll() is not None
+                error = {"worker-error": ValueError, "worker-corrupt": ValueError,
+                         "worker-no-response": TimeoutError, "worker-late-response": TimeoutError,
+                         "worker-prepare-lock": TimeoutError, "worker-validation-timeout": TimeoutError,
+                         "worker-prepare-lease": TimeoutError, "worker-spawn-delay": TimeoutError,
+                         "worker-cleanup-delay": TimeoutError, "worker-validation-spawn-delay": TimeoutError}.get(case)
+                if error:
+                    with pytest.raises(error):
+                        client.venv_is_current(project_root=root, deadline=10)
+                elif case == "worker-validation-error":
+                    from pm.package import InstallError
+                    with pytest.raises(InstallError, match="pm-runtime"):
+                        client.venv_is_current(project_root=root, deadline=10)
+                else:
+                    if case == "worker-chain-ready":
+                        assert venv_sync.prepare_launch(root, ["auth", "status", "openai-codex"], deadline=10) == python
+                    else:
+                        assert client.venv_is_current(project_root=root, deadline=10)
+                    if case in {"worker-chain-ready", "worker-activation-lease"}:
+                        before = list(sys.path)
+                        monkeypatch.setattr(sys, "path", before)
+                        monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+                        if case == "worker-activation-lease":
+                            with pytest.raises(TimeoutError):
+                                activate_dependencies(root, read_only=True, expected_facts=snapshot,
+                                                      expected_inputs=inputs, deadline=10)
+                        else:
+                            activate_dependencies(root, read_only=True, expected_facts=snapshot,
+                                                  expected_inputs=inputs, deadline=10)
+                            assert str(site_packages(app)) in sys.path
+                assert now[0] <= 10.05, events  # Existing lock polling can overshoot by one 50ms tick.
+                assert ("readline", None) not in events and ("wait", 5) not in events
+                if case in {"worker-prepare-lock", "worker-validation-timeout", "worker-prepare-lease", "worker-validation-error"}:
+                    assert not phases["worker"]
+                if case == "worker-prepare-lock":
+                    assert not phases["validated"]
+                if case in {"worker-no-response", "worker-cleanup-delay"}:
+                    waits = [timeout for event, timeout in events if event == "wait"]
+                    assert waits == [8.5, 1]
+                if phases["worker"]:
+                    assert process.stdin.closed and process.stdout.closed
+                    for stream in (process.stdin, process.stdout):
+                        if isinstance(stream.name, str):
+                            assert not Path(stream.name).exists()
+                    assert process.poll() is not None
+                if validation.returncode is not None:
+                    assert validation.poll() is not None and validation.transport.closed
+                    if isinstance(validation.transport.name, str):
+                        assert not Path(validation.transport.name).exists()
+        finally:
+            record_property("virtual_elapsed", now[0])
+            record_property("deadline_trace", json.dumps(events))
+            for release in runtime._HELD.values():
+                release()
         return
 
     fact = runtime_facts_path(root)
@@ -544,7 +688,8 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
         fact.write_text("invalid JSON")
     calls = []
     def current(**kwargs):
-        assert kwargs == {"project_root": root, "timeout": 10}
+        assert kwargs["project_root"] == root
+        assert kwargs["deadline"] > 0 and set(kwargs) == {"project_root", "deadline"}
         calls.append(kwargs)
         if case == "error":
             raise TimeoutError("fixture deadline")
@@ -561,5 +706,14 @@ def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, 
     else:
         with pytest.raises(venv_sync.RuntimeNotReady, match="runtime-not-ready"):
             venv_sync.prepare_launch(root, ["auth", "status", "openai-codex"])
+    if case == "relaunch":
+        argv = ["-c", "auth", "status", "openai-codex"]
+        command = venv_sync.relaunch_command(python, root, argv, [str(python), "-c", "pass"], None, deadline=123.5)
+        monkeypatch.setattr(sys, "argv", list(sys.argv))
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        globals_dict = {}
+        exec(command[-1], globals_dict)
+        assert getattr(sys, "_hermes_status_deadline") == 123.5
+        delattr(sys, "_hermes_status_deadline")
     assert len(calls) == (1 if case in {"ready", "relaunch", "stale", "error"} else 0)
     assert not completion_tail and not completion_tail.path_requests

@@ -111,13 +111,37 @@ the selected managed Python for ABI compatibility without publishing launchers.
 
 Dependency currency still uses PM's canonical `venv_is_current` stamp comparison
 (core lock, Python pin/target, extras and the selected plugin union). Its worker
-operation retains `bootstrap=never`. This command alone passes a ten-second request
-budget: the response/exit wait reserves the final second for killing and waiting
-for that request's owned worker. Late responses are rejected. Ordinary requests
-keep their existing pipe/callback protocol and default waits. Synchronous OS
-file/process creation cannot be preempted by this budget; elapsed preparation and
-launch time are checked before waiting. This is not a deadline for the whole
-auth handler.
+operation retains `bootstrap=never`. This command alone starts one ten-second
+monotonic preparation deadline before the facts/input snapshot and passes that
+same deadline through PM resolution, validation, worker response/cleanup and
+observational activation. ABI re-entry carries it in ephemeral interpreter state,
+not persisted configuration or a new environment variable, so a child does not
+receive a fresh budget. Late responses and exhausted preparation fail closed;
+there is no install, sync, completion or recovery retry. Bounded PM-runtime failures
+remain errors instead of being reported as ordinary unknown/stale currency.
+
+The inspected call graph and blocking boundaries are:
+
+| Stage | Existing owner/boundary | Status deadline behavior |
+| --- | --- | --- |
+| Snapshot and interpreter/tool selection | bootstrap, `venv_sync`, PM `runtime_command`/`runtime_python`, `_toolchain(realize=False)` | Same deadline; elapsed local metadata reads checked before subsequent waits. |
+| Prepare lock | `pm/runtime.py:prepare_runtime` → `pm/filesystem.py:lock_fd` | Remaining budget minus one-second cleanup reserve; contention fails without bypass/deletion. |
+| PM import validation | `pm/runtime.py:_validate` | Owned subprocess and exclusive temporary stderr transport; bounded wait/kill/cleanup instead of `run`/`communicate`. |
+| PM generation pin | `_hold_for_children` → existing `runtime_state.lease_directory` | Same remaining lock/retry budget, normal lifetime ownership. |
+| Worker spawn, queue/reader and currency computation | `pm/client.py:_request` → `worker.py` | Parent supervises the entire worker body, including its queue, lease and metadata computation; no client reader/monitor thread. |
+| Response and cleanup | `_request` owned process wait/kill/reap, temporary streams | Response uses remaining budget minus reserve; cleanup uses only remaining deadline, never a fresh timeout. |
+| Publication and app generation pin | `activate_dependencies` → existing runtime lock/lease | Publication lock tries once; lease gets remaining budget. Pending journal or state/input drift fails, without recovery. |
+| Dependency import activation | `site.addsitedir` and selected `.pth` code | State/deadline checked before and after; arbitrary trusted Python cannot be interrupted by these checks. |
+| ABI re-entry | `relaunch_command`, Windows `subprocess.call` or POSIX `execv` | Child receives the original preparation deadline; Windows parent still waits for the whole auth command. |
+
+Ordinary requests retain their pipe/callback protocol, default PM validation timeout
+and normal install/recovery/activation behavior. The one-second reserve and existing
+50ms lock polling bound the cooperative waits, not arbitrary synchronous OS file or
+process creation, trusted `.pth` execution, scheduling delays, or a failed OS kill.
+Those are checked after returning; this is not a hard wall-clock guarantee for the
+whole launcher/auth handler, nor a process-tree supervisor. Ownership remains with
+each existing lock/lease/process; only its own process is killed and only its own
+failed temporary lease/transport is removed.
 
 The bootstrap retains facts bytes and PM input mtimes in memory from before the
 probe. Observational activation tries the existing publication lock immediately;
@@ -153,3 +177,28 @@ failure/normal cases and six existing entrypoint-order cases. All ran through
 23 pre-existing diagnostics, with no new issue. The post-cleanup raw HKCU PATH
 and type fingerprint stayed `2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
 No additional registry cleanup was performed by this change.
+
+Follow-up verification on 2026-09-30 (UTC): the previous `_worker_command` test double
+had hidden the PM prepare lock and validation waits. The fixture now traverses the
+production resolver/preparation chain with temporary pinned tool/PM/app metadata;
+only the OS kernel lock, subprocess and clock behavior is simulated. Canonical
+currency comparison also runs in the fixture. Prepare-lock and PM/app lease stalls
+end at about 9.05 virtual seconds (one existing polling tick); validation/response
+timeout plus owned cleanup ends at 9.25, delayed worker spawn plus cleanup at 9.75,
+and longer successful cleanup at 9.9. Normal currency/status preparation and
+activation complete at 0.5 virtual seconds. These are synthetic measurements, not
+the historical SkillWave event or a natural execution receipt. The selected real
+installation preparation path was inspected again; no actual PM/auth probe,
+installation, network call, service restart or registry mutation was executed.
+
+The follow-up native checks passed 49 launch cases and 25 affected bootstrap cases
+(74 distinct cases) through `scripts/run_tests.sh`. After fixture typing cleanup,
+the 29 status preparation and seven status bootstrap cases passed again; the final
+three transport/normal-status cases also passed. The per-file runner's shared
+JUnit output path contains only the last file of a combined run, so its existing
+runner log supplies that run's 36-case aggregate. Base/head ruff stayed 0/0; ty
+stayed 23/23 existing diagnostics (19 stable keys), with no new diagnostic. Exact
+diff/syntax checks passed. The HKCU PATH raw value/type hash remained `2529b2...`;
+no registry/PATH cleanup or runtime activation was performed. The installation is
+editable against this source; already-running processes were not restarted and
+natural SkillWave recovery remains unobserved.

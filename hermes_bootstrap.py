@@ -538,14 +538,23 @@ if not _pm_repair:
 
     try:
         _status_probe = is_auth_status_probe(sys.argv[1:])
+        _status_deadline = None
+        if _status_probe:
+            _status_deadline = getattr(sys, "_hermes_status_deadline", None)
+            if hasattr(sys, "_hermes_status_deadline"):
+                delattr(sys, "_hermes_status_deadline")
+            if _status_deadline is None:
+                _status_deadline = time.monotonic() + 10
         _status_facts = runtime_facts_path(_root).read_bytes() if _status_probe else None
         _status_inputs = activation_input_mtimes(_root) if _status_probe else None
-        _launch_python = prepare_launch(_root, sys.argv[1:])
+        _launch_python = prepare_launch(_root, sys.argv[1:],
+                                        **({"deadline": _status_deadline} if _status_probe else {}))
         if _launch_python is not None:
             _main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
             _command = relaunch_command(
                 _launch_python, _root, sys.argv, sys.orig_argv,
                 getattr(_main_spec, "name", None),
+                **({"deadline": _status_deadline} if _status_probe else {}),
             )
             if os.name == "nt":
                 import subprocess
@@ -572,7 +581,7 @@ if not _pm_repair:
     try:
         if _status_probe:
             activate_dependencies(_root, read_only=True,
-                                  expected_facts=_status_facts, expected_inputs=_status_inputs)
+                                  expected_facts=_status_facts, expected_inputs=_status_inputs, deadline=_status_deadline)
         else:
             recover_if_needed(_root)
             activate_dependencies(_root)

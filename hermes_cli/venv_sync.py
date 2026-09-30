@@ -246,13 +246,17 @@ def is_auth_status_probe(argv: list[str]) -> bool:
     return command_argv(argv) == ["auth", "status", "openai-codex"]
 
 
-def _prepare_auth_status(root: Path) -> Path | None:
+def _prepare_auth_status(root: Path, *, deadline: float | None = None) -> Path | None:
     import sys
+    import time
     import pm
     from hermes_cli._launchers import resolve_store_python
     from pm.environments import committed_venv, install_state_dir, site_packages
 
+    deadline = time.monotonic() + 10 if deadline is None else deadline
     try:
+        if time.monotonic() >= deadline - 1:
+            raise TimeoutError("status preparation deadline exhausted")
         state = install_state_dir(root)
         if any(path.exists() for path in (
             completion_pending_path(root), state / ".repair-incomplete", state / "publication.json",
@@ -265,8 +269,10 @@ def _prepare_auth_status(root: Path) -> Path | None:
         python = resolve_store_python(root)
         if python is None:
             raise RuntimeNotReady("runtime-not-ready: managed Python is missing; run `hermes pm install`")
-        if not pm.venv_is_current(project_root=root, timeout=10):
+        if not pm.venv_is_current(project_root=root, deadline=deadline):
             raise RuntimeNotReady("runtime-not-ready: dependency inputs are stale; run `hermes update`")
+        if time.monotonic() >= deadline - 1:
+            raise TimeoutError("status preparation deadline exhausted")
         # Preserve the interpreter/ABI without publishing launchers.
         same = os.path.normcase(os.path.abspath(python)) == os.path.normcase(os.path.abspath(sys.executable))
         return None if same else python
@@ -279,7 +285,7 @@ def _prepare_auth_status(root: Path) -> Path | None:
         ) from exc
 
 
-def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
+def prepare_launch(project_root: Path, argv: list[str], *, deadline: float | None = None) -> Path | None:
     """Finish a self-managed source update before importing app dependencies.
 
     PM's successful input stamp signals a finished dependency sync; the
@@ -296,7 +302,7 @@ def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
 
     root = Path(project_root).resolve()
     if is_auth_status_probe(argv):
-        return _prepare_auth_status(root)
+        return _prepare_auth_status(root, deadline=deadline)
     if (command_argv(argv)[:1] == ["pm"]
             or _METADATA_FLAGS & set(argv)
             or os.environ.get("HERMES_DISABLE_LAZY_INSTALLS", "").lower() in ("1", "true", "yes")
@@ -436,6 +442,7 @@ def _sync_source_dependencies(root: Path, *, arm: bool) -> None:
 
 def relaunch_command(
     python: Path, root: Path, argv: list[str], original: list[str], module: str | None,
+    *, deadline: float | None = None,
 ) -> list[str]:
     """Re-enter the same script/module/launcher with the managed interpreter.
 
@@ -455,6 +462,9 @@ def relaunch_command(
             options.append(original[index])
             index += 1
     prefix = f"import sys, runpy; sys.path.insert(0, {str(root)!r}); sys.argv = {argv!r}; "
+    if deadline is not None:
+        # Ephemeral interpreter handoff, never configuration or a new environment variable.
+        prefix += f"sys._hermes_status_deadline = {deadline!r}; "
     if argv[0] == "-c":
         body = f"exec({original[index + 1]!r})"
     elif module and module != "__main__":

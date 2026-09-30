@@ -12,6 +12,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from typing import Callable
 import uuid
 
@@ -95,7 +97,35 @@ def _resident_runtime() -> tuple[Path, Path] | None:
     return python, site
 
 
-def _validate(python: Path, env: dict[str, str]) -> str:
+def _remaining(deadline: float, *, reserve: float = 0) -> float:
+    remaining = deadline - time.monotonic() - reserve
+    if remaining <= 0:
+        raise TimeoutError("PM preparation deadline exhausted")
+    return remaining
+
+
+def _validate(python: Path, env: dict[str, str], *, deadline: float | None = None) -> str:
+    if deadline is not None:
+        # Regular stderr transport avoids communicate's unbounded timeout cleanup.
+        _remaining(deadline, reserve=1)
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+            process = subprocess.Popen(
+                [str(python), "-I", "-B", "-c",
+                 "import packaging, tomli_w, truststore; from ruamel.yaml import YAML"],
+                env=env, stdout=subprocess.DEVNULL, stderr=errors,
+            )
+            try:
+                try:
+                    process.wait(timeout=_remaining(deadline, reserve=1))
+                except subprocess.TimeoutExpired:
+                    raise TimeoutError("PM runtime validation deadline exceeded") from None
+                _remaining(deadline, reserve=1)
+                errors.seek(0)
+                return errors.read().strip() or f"exit {process.returncode}" if process.returncode else ""
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
     try:
         checked = subprocess.run(
             [str(python), "-I", "-B", "-c",
@@ -116,16 +146,18 @@ def _validate(python: Path, env: dict[str, str]) -> str:
 _HELD: dict[Path, Callable[[], None]] = {}
 
 
-def _hold_for_children(environment: Path) -> None:
+def _hold_for_children(environment: Path, *, deadline: float | None = None) -> None:
     from hermes_cli.runtime_state import lease_directory
 
+    if deadline is not None:
+        _remaining(deadline, reserve=1)
     if environment not in _HELD:
-        _HELD[environment] = lease_directory(environment)
+        _HELD[environment] = lease_directory(environment, **({"deadline": deadline} if deadline is not None else {}))
 
 
 def prepare_runtime(uv: Path, python: Path, root: Path, *, offline: bool = False,
                     project: Path | None = None, bootstrap: bool = True,
-                    cache: Path | None = None) -> Path:
+                    cache: Path | None = None, deadline: float | None = None) -> Path:
     """Publish a locked PM environment without resolving the application.
 
     Generations are immutable after publication. Failed preparation leaves the
@@ -135,12 +167,21 @@ def prepare_runtime(uv: Path, python: Path, root: Path, *, offline: bool = False
     from pm.lock import _write
     from pm.runtime_stage import stage_runtime
 
+    if deadline is not None:
+        if bootstrap:
+            raise ValueError("a bounded PM runtime probe must disable bootstrap")
+        _remaining(deadline, reserve=1)
     project = project or Path(__file__).resolve().parent
     identity = _inputs(project, python)
     env = runtime_environment()
     root.mkdir(parents=True, exist_ok=True)
     with (root / ".prepare.lock").open("a+b") as lock:
-        lock_fd(lock.fileno(), wait=True)
+        if deadline is None:
+            lock_fd(lock.fileno(), wait=True)
+        elif not lock_fd(lock.fileno(), wait=True, timeout=_remaining(deadline, reserve=1)):
+            raise TimeoutError("PM runtime preparation lock deadline exceeded")
+        if deadline is not None:
+            _remaining(deadline, reserve=1)
         selected = root / "selected.json"
         try:
             fact = json.loads(selected.read_text(encoding="utf-8"))
@@ -150,8 +191,9 @@ def prepare_runtime(uv: Path, python: Path, root: Path, *, offline: bool = False
         # home under a symlink (/home -> /var/home) that is still this interpreter.
         if fact.get("inputs") in (identity, _inputs(project, python, as_spelled=True)):
             environment = root / fact["generation"]
-            if (environment / "pm-runtime.json").is_file() and not _validate(_python(environment), env):
-                _hold_for_children(environment)
+            if (environment / "pm-runtime.json").is_file() and not _validate(
+                    _python(environment), env, **({"deadline": deadline} if deadline is not None else {})):
+                _hold_for_children(environment, **({"deadline": deadline} if deadline is not None else {}))
                 return _python(environment)
         if not bootstrap:
             raise InstallError("pm-runtime", "not installed or outdated and lazy installs are disabled",
@@ -213,8 +255,12 @@ def collect_runtime_generations(root: Path) -> list[Path]:
 
 
 
-def runtime_python(*, bootstrap: bool = True, cache: Path | None = None) -> Path:
+def runtime_python(*, bootstrap: bool = True, cache: Path | None = None, deadline: float | None = None) -> Path:
     """Resolve PM without selecting, repairing, or importing the app environment."""
+    if deadline is not None:
+        if bootstrap:
+            raise ValueError("a bounded PM runtime probe must disable bootstrap")
+        _remaining(deadline, reserve=1)
     if is_runtime():
         return Path(sys.executable)
     from pm.environments import install_state_dir
@@ -250,15 +296,19 @@ def runtime_python(*, bootstrap: bool = True, cache: Path | None = None) -> Path
         raise InstallError("pm-runtime", "pinned uv and Python are unavailable")
     uv, python = tools
     return prepare_runtime(uv, python, install_state_dir(project) / "pm-runtime",
-                           bootstrap=bootstrap, cache=cache)
+                           bootstrap=bootstrap, cache=cache, **({"deadline": deadline} if deadline is not None else {}))
 
 
 def runtime_command(script: Path, args: tuple[str, ...] | list[str] = (), *,
-                    bootstrap: bool = True, cache: Path | None = None) -> list[str]:
+                    bootstrap: bool = True, cache: Path | None = None, deadline: float | None = None) -> list[str]:
     """One launch contract for mutable venvs and resident signed payloads."""
+    if deadline is not None:
+        if bootstrap:
+            raise ValueError("a bounded PM runtime probe must disable bootstrap")
+        _remaining(deadline, reserve=1)
     resident = _resident_runtime()
     if resident is None:
-        python = runtime_python(bootstrap=bootstrap, cache=cache)
+        python = runtime_python(bootstrap=bootstrap, cache=cache, **({"deadline": deadline} if deadline is not None else {}))
         return [str(python), "-I", "-B", str(script), *args]
     python, site = resident
     launcher = (

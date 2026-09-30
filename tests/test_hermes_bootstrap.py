@@ -655,7 +655,7 @@ class TestNeverFreeEnviron:
             assert grown < 64 * 1024, f"20k set/del of 4 names grew the heap by {grown} bytes"
         """)], check=True, cwd=str(Path(__file__).resolve().parents[1]), timeout=120)
 
-@pytest.mark.parametrize("case", ["not-ready", "unexpected-error", "activation-unavailable", "activation-lock", "ready", "ordinary-compatible"])
+@pytest.mark.parametrize("case", ["not-ready", "unexpected-error", "activation-unavailable", "activation-lock", "ready", "ready-inherited", "ordinary-compatible"])
 def test_auth_status_bootstrap_failure_contract(tmp_path, case):
     """Status fails before auth and never repairs; ordinary compatible fallback remains."""
     import json
@@ -667,6 +667,10 @@ repo, case = sys.argv[1:]
 sys.path.insert(0, repo)
 sys.argv = ['hermes', 'auth', 'status', 'openai-codex'] if case != 'ordinary-compatible' else ['hermes', 'chat']
 events = []
+import time
+time.monotonic = lambda: 5.0
+if case == 'ready-inherited':
+    sys._hermes_status_deadline = 12.0
 
 class RuntimeNotReady(RuntimeError): pass
 
@@ -674,8 +678,9 @@ def forbidden(*args, **kwargs):
     events.append('forbidden-side-effect')
     raise AssertionError('unexpected real executor, credential, registry or network boundary')
 
-def prepare(root, argv):
+def prepare(root, argv, *, deadline=None):
     assert argv == sys.argv[1:]
+    assert deadline == (None if case == "ordinary-compatible" else (12.0 if case == "ready-inherited" else 15.0))
     events.append('prepare')
     if case == 'not-ready':
         raise RuntimeNotReady('runtime-not-ready: fixture incomplete')
@@ -683,9 +688,10 @@ def prepare(root, argv):
         raise RuntimeError('fixture source completion not ready')
     return None
 
-def activate(root, *, read_only=False, expected_facts=None, expected_inputs=None):
+def activate(root, *, read_only=False, expected_facts=None, expected_inputs=None, deadline=None):
     assert read_only == (case != 'ordinary-compatible')
     if read_only:
+        assert deadline == (12.0 if case == "ready-inherited" else 15.0)
         assert expected_facts == b'fixture facts' and expected_inputs == {}
     events.append('activate')
     if case == 'activation-unavailable':
@@ -751,6 +757,7 @@ print(json.dumps({'case': case, 'argv': sys.argv[1:], 'events': events,
         "activation-unavailable": (["prepare", "activate"], 1, 0),
         "activation-lock": (["prepare", "activate"], 1, 0),
         "ready": (["prepare", "activate", "auth-entry-stub"], 0, 1),
+        "ready-inherited": (["prepare", "activate", "auth-entry-stub"], 0, 1),
         "ordinary-compatible": (["prepare", "recover", "activate", "auth-entry-stub"], 0, 1),
     }
     events, exit_code, auth_count = expected[case]
@@ -759,7 +766,7 @@ print(json.dumps({'case': case, 'argv': sys.argv[1:], 'events': events,
     assert trace["auth_entry_stub_count"] == auth_count
     if case == "ordinary-compatible":
         assert "running with the previous dependencies" in result.stderr
-    elif case != "ready":
+    elif case not in {"ready", "ready-inherited"}:
         assert "runtime-not-ready" in result.stderr
         assert "running with the previous dependencies" not in result.stderr
     if case == "activation-lock":

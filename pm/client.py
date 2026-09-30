@@ -49,7 +49,7 @@ def _refuse_cold_runtime(cold: InstallError, arguments) -> InstallError:
     return exc
 
 
-def _worker_command(spec, arguments, worker: Path, environment: dict) -> list[str]:
+def _worker_command(spec, arguments, worker: Path, environment: dict, *, deadline: float | None = None) -> list[str]:
     """How to start the worker; may disable lazy installs in *environment*."""
     from pm.install import lazy_installs_allowed
     from pm.registry import get_package
@@ -69,7 +69,8 @@ def _worker_command(spec, arguments, worker: Path, environment: dict) -> list[st
         environment["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
         return command
     if spec.bootstrap == "never":
-        return runtime_command(worker, bootstrap=False, cache=cache)
+        return runtime_command(worker, bootstrap=False, cache=cache,
+                               **({"deadline": deadline} if deadline is not None else {}))
     return runtime_command(worker, cache=cache)
 
 
@@ -90,11 +91,13 @@ def _raise_worker_error(error: dict):
     raise _WORKER_ERRORS.get(error["type"], RuntimeError)(error["message"])
 
 
-def _request(operation, arguments, *, callbacks=None, pause_event=None, project_root=None, timeout: float | None = None):
+def _request(operation, arguments, *, callbacks=None, pause_event=None, project_root=None, timeout: float | None = None, deadline: float | None = None):
     # Ordinary requests retain their protocol; this budget is observational only.
-    deadline = None if timeout is None else time.monotonic() + timeout
-    if timeout is not None and (operation != "venv_is_current" or callbacks or pause_event is not None
-                                 or timeout <= 1):
+    if deadline is not None and timeout is not None:
+        raise ValueError("use either a deadline or a timeout")
+    deadline = time.monotonic() + timeout if timeout is not None else deadline
+    if deadline is not None and (operation != "venv_is_current" or callbacks or pause_event is not None
+                                 or deadline - time.monotonic() <= 1):
         raise ValueError("a bounded PM probe requires venv_is_current and a cleanup reserve")
     from pm import receipt
     from pm.registry import package_definitions
@@ -115,7 +118,8 @@ def _request(operation, arguments, *, callbacks=None, pause_event=None, project_
     }
     worker = Path(__file__).with_name("worker.py").resolve()
     environment = runtime_environment()
-    command = _worker_command(spec, arguments, worker, environment)
+    command = _worker_command(spec, arguments, worker, environment,
+                              **({"deadline": deadline} if deadline is not None else {}))
     if deadline is not None:
         # Exclusively created temporary files carry the same JSON protocol without
         # blocking pipe writes or Windows communicate reader threads. They are
@@ -397,17 +401,18 @@ def ensure_python_tool(
 
 
 def venv_is_current(*, extras: list[str] | None = None, plugins: Members | Candidates | None = None,
-                    project_root: Path | None = None, timeout: float | None = None) -> bool:
+                    project_root: Path | None = None, timeout: float | None = None, deadline: float | None = None) -> bool:
     """Check through a ready PM; an optional probe budget includes worker cleanup."""
-    if timeout is None and is_runtime() and (project_root is None or Path(project_root).resolve() == paths.repo_root().resolve()):
+    if timeout is None and deadline is None and is_runtime() and (project_root is None or Path(project_root).resolve() == paths.repo_root().resolve()):
         from pm.install import venv_is_current as direct
         return direct(extras=extras, plugins=plugins, project_root=project_root)
     try:
         return bool(_request("venv_is_current", {"extras": extras, "plugins": plugin_inputs.encode(plugins)},
-                             project_root=project_root, **({"timeout": timeout} if timeout is not None else {})))
+                             project_root=project_root, **({"timeout": timeout} if timeout is not None else {}),
+                             **({"deadline": deadline} if deadline is not None else {})))
     except InstallError as exc:
-        if exc.package == "pm-runtime":
-            return False  # Without its checker, currency cannot be established.
+        if exc.package == "pm-runtime" and timeout is None and deadline is None:
+            return False  # Ordinary callers retain the historical unknown-currency result.
         raise
 
 

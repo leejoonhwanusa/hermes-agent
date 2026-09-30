@@ -304,7 +304,7 @@ def _require_own_dependencies(project_root: Path) -> None:
 
 def activate_dependencies(project_root: Path, *, read_only: bool = False,
                           expected_facts: bytes | None = None,
-                          expected_inputs: dict[str, int] | None = None) -> None:
+                          expected_inputs: dict[str, int] | None = None, deadline: float | None = None) -> None:
     """Select the committed tree at process boot, before third-party imports.
 
     A process with no extension selection keeps its original launch contract.
@@ -312,11 +312,17 @@ def activate_dependencies(project_root: Path, *, read_only: bool = False,
     """
     import sys
 
+    if deadline is not None and not read_only:
+        raise ValueError("an activation deadline requires observation mode")
     state = install_state_dir(project_root)
     if read_only and (not state.is_dir() or expected_facts is None or expected_inputs is None):
         raise RuntimeError("runtime-not-ready: observed dependency selection is unavailable")
 
     def require_observed_state() -> None:
+        import time
+
+        if deadline is not None and time.monotonic() >= deadline - 1:
+            raise RuntimeError("runtime-not-ready: status preparation deadline exhausted")
         if any(path.exists() for path in (
             state / "publication.json", state / "source-completion-pending", state / ".repair-incomplete",
             project_root / ".update-incomplete", project_root / ".lazy-refresh-incomplete",
@@ -343,7 +349,7 @@ def activate_dependencies(project_root: Path, *, read_only: bool = False,
                 if read_only:
                     raise RuntimeError("runtime-not-ready: no dependency environment is committed")
                 return _require_own_dependencies(project_root)
-            release = lease_generation(environment)
+            release = lease_generation(environment, **({"deadline": deadline} if deadline is not None else {}))
             if read_only:
                 try:
                     require_observed_state()
@@ -375,7 +381,15 @@ def activate_dependencies(project_root: Path, *, read_only: bool = False,
                    if Path(entry).name not in ("site-packages", "dist-packages")
                    and Path(entry).resolve() != project_root.resolve()]
     # uv editable members are activated by .pth files, not by sys.path alone.
+    if read_only:
+        require_observed_state()
     site.addsitedir(str(selected))
+    if read_only:
+        try:
+            require_observed_state()
+        except BaseException:
+            release()
+            raise
     sys.path[:] = [str(project_root.resolve()), str(selected),
                    *[entry for entry in sys.path if Path(entry).resolve() != selected.resolve()]]
     os.environ["PYTHONPATH"] = os.pathsep.join([str(project_root.resolve()), str(selected)])

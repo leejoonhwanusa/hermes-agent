@@ -136,30 +136,49 @@ def finish_publication(project: Path) -> None:
     recover_publication(project)
 
 
-def lease_generation(environment: Path) -> Callable[[], None]:
+def lease_generation(environment: Path, *, deadline: float | None = None) -> Callable[[], None]:
     """Hold a kernel lock until process exit; the returned callable releases it early.
 
     Call under ``runtime_lock`` at boot. Without the lock (``runtime_lock`` timed out) the
     caller must re-read the selection after leasing: an installer may have moved it in between,
     and an unselected, unleased generation is exactly what the collector removes.
     """
-    return lease_directory(environment.parent)
+    return lease_directory(environment.parent, **({"deadline": deadline} if deadline is not None else {}))
 
 
-def lease_directory(generation: Path) -> Callable[[], None]:
+def lease_directory(generation: Path, *, deadline: float | None = None) -> Callable[[], None]:
     """Pin a lease-managed generation directory for this process's lifetime."""
+    def remaining() -> float:
+        assert deadline is not None
+        value = deadline - time.monotonic() - 1
+        if value <= 0:
+            raise TimeoutError("generation lease deadline exhausted")
+        return value
+
+    if deadline is not None:
+        remaining()
     if not (generation / ".lease-managed").is_file():
         return lambda: None  # Generations produced before leases stay conservatively retained.
     leases = generation / ".leases"
     leases.mkdir(exist_ok=True)
-    _prune_unlocked_leases(leases)
+    _prune_unlocked_leases(leases, **({"deadline": deadline} if deadline is not None else {}))
     while True:
+        if deadline is not None:
+            remaining()
         lease = leases / uuid.uuid4().hex
         fd = os.open(lease, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
         try:
-            _lock(fd, wait=True)
+            if deadline is None:
+                _lock(fd, wait=True)
+            elif not _lock(fd, wait=True, timeout=remaining()):
+                raise TimeoutError("generation lease lock deadline exceeded")
+            if deadline is not None:
+                remaining()
         except BaseException:
             os.close(fd)
+            if deadline is not None:
+                with suppress(OSError):
+                    lease.unlink()
             raise
         # Create and flock are two syscalls; a peer's prune (pm workers and launch run outside
         # ``runtime_lock``) can lock-and-unlink the file in between, and we would then hold an
@@ -213,7 +232,7 @@ def leases_held(generation: Path) -> bool:
     return _prune_unlocked_leases(generation / ".leases")
 
 
-def _prune_unlocked_leases(leases: Path) -> bool:
+def _prune_unlocked_leases(leases: Path, *, deadline: float | None = None) -> bool:
     """Remove abandoned lease files and report whether any live lock remains.
 
     Kernel locks disappear even when ``execv``, ``os._exit`` or a crash bypasses
@@ -225,6 +244,8 @@ def _prune_unlocked_leases(leases: Path) -> bool:
     """
     held = False
     for lease in leases.glob("*"):
+        if deadline is not None and time.monotonic() >= deadline - 1:
+            raise TimeoutError("generation lease inspection deadline exhausted")
         try:
             fd = os.open(lease, os.O_RDWR)
         except FileNotFoundError:
