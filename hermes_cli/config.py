@@ -2069,11 +2069,14 @@ def load_config() -> Dict[str, Any]:
     return _load_config_impl(want_deepcopy=True)
 
 
-def load_config_readonly() -> Dict[str, Any]:
+def load_config_readonly(*, observe_only: bool = False) -> Dict[str, Any]:
     """``load_config()`` without the defensive deepcopy (~half of the 265us cache-hit cost).
     **Mutating the returned dict (or any nested structure) corrupts the in-process cache for
     every subsequent caller** — only for code paths that never write to the result."""
-    return _load_config_impl(want_deepcopy=False)
+    # Observation uses the same effective reader without initializing a home or
+    # writing backups. It does not prime runtime caches: a later ordinary load
+    # must still perform its normal initialization and backup publication.
+    return _load_config_impl(want_deepcopy=False, observe_only=observe_only)
 
 
 def _ensure_dict(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
@@ -2215,7 +2218,7 @@ def _load_config_cache_sig(config_path: Path) -> Tuple[Optional[Tuple[int, int, 
     return user_sig, (*(user_sig or (0, 0, 0, 0)), *managed_sig)
 
 
-def _last_known_good_fallback(config_path: Path, path_key: str, cache_sig, exc: Exception) -> Optional[Dict[str, Any]]:
+def _last_known_good_fallback(config_path: Path, path_key: str, cache_sig, exc: Exception, *, observe_only: bool = False) -> Optional[Dict[str, Any]]:
     """Warn about a parse failure and return the last-known-good config, or None (-> defaults).
     A parse failure must not silently replace the effective config with defaults — that drops
     EVERY user override, including security-critical ``approvals.deny`` rules, when a gateway
@@ -2239,13 +2242,14 @@ def _last_known_good_fallback(config_path: Path, path_key: str, cache_sig, exc: 
             lkg, _ = _merge_managed_overlay(expanded_good)
             fallback = "last-known-good-backup"
     _warn_config_parse_failure(
-        config_path, exc, fallback=fallback if lkg is not None else "defaults")
+        config_path, exc, fallback=fallback if lkg is not None else "defaults",
+        **({"observe_only": True} if observe_only else {}))
     if lkg is None:
         return None
     # save_config() stores the pre-expansion dict (templates preserved); the load path stores the
     # expanded one. Expand defensively — idempotent when already expanded.
     lkg_copy = FailedConfigRead(_expand_env_vars(copy.deepcopy(lkg)), error=exc)
-    if cache_sig is not None:
+    if cache_sig is not None and not observe_only:
         # Cache under the failed file's signature (empty env snapshot: always valid) so repeated
         # loads don't re-parse the fallback; fixing the file changes the signature and reloads
         # normally, and a read error is re-probed on every hit (_load_config_cache_hit).
@@ -2296,7 +2300,7 @@ def _load_config_cache_hit(path_key: str, cache_sig: Any) -> Optional[Dict[str, 
     return None
 
 
-def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
+def _load_config_impl(*, want_deepcopy: bool, observe_only: bool = False) -> Dict[str, Any]:
     # Lock-free fast path for cache hits — same publication contract as `_read_raw_config_impl`
     # above (whole-tuple replace, `_CONFIG_LOCK` only serializes rebuilds and writers). A hit costs
     # ~0.024ms; behind a lock held by `save_config()` the same read measured 10010ms, and on a
@@ -2315,7 +2319,8 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
         pass
 
     with _CONFIG_LOCK:
-        ensure_hermes_home()
+        if not observe_only:
+            ensure_hermes_home()
         config_path = get_config_path()
         path_key = str(config_path)
 
@@ -2345,21 +2350,24 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
                 # next edit breaks the YAML (see _last_known_good_fallback). backup_config() skips
                 # byte-identical repeats and keeps a bounded count, so steady-state loads cost one stat.
                 from hermes_cli.config_backups import backup_config
-                backup_config(config_path, "good")
+                if not observe_only:
+                    backup_config(config_path, "good")
             except Exception as e:
-                lkg_copy = _last_known_good_fallback(config_path, path_key, cache_sig, e)
+                lkg_copy = _last_known_good_fallback(config_path, path_key, cache_sig, e, observe_only=observe_only)
                 if lkg_copy is not None:
                     return copy.deepcopy(lkg_copy) if want_deepcopy else lkg_copy
                 # Defaults stand in for the unreadable file: never the next last-known-good,
                 # never saveable, and cached like the LKG path.
                 fallback = FailedConfigRead(
                     _merge_managed_overlay(_expand_env_vars(_canonicalize_config(config)))[0], error=e)
-                if cache_sig is not None:
+                if cache_sig is not None and not observe_only:
                     _LOAD_CONFIG_CACHE[path_key] = (*cache_sig, fallback, {})
                 return copy.deepcopy(fallback) if want_deepcopy else fallback
 
         normalized = _canonicalize_config(config)
         expanded, managed_config = _merge_managed_overlay(_expand_env_vars(normalized))
+        if observe_only:
+            return expanded
         _LAST_EXPANDED_CONFIG_BY_PATH[path_key] = copy.deepcopy(expanded)
         if cache_sig is not None:
             # The cache stores its own deepcopy so load_config() callers can mutate freely while

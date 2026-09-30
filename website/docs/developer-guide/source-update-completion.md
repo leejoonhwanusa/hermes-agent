@@ -157,9 +157,9 @@ closed/deleted on success and exceptions, with existing host temporary-file
 permissions (POSIX mode 0600; Windows host ACLs). The request carries PM operation,
 dependency inputs, import identities/paths and correlation metadata, not auth
 tokens or credentials. There are no client pipe-reader/monitor threads, persistent
-transport files, new servers or process-wide kill operations. The unchanged auth
-status handler can still call `load_pool()` for grant healing; this change does not
-make the entire auth command read-only.
+transport files, new servers or process-wide kill operations. This preparation-only
+change does not establish read-only behavior for the entire CLI. The auth/helper
+follow-up below addresses its separate credential and config maintenance.
 
 Local verification uses only the two existing launch/bootstrap test boundaries,
 temporary homes, fake PM/process/auth/registry/network adapters and a virtual
@@ -202,3 +202,49 @@ diff/syntax checks passed. The HKCU PATH raw value/type hash remained `2529b2...
 no registry/PATH cleanup or runtime activation was performed. The installation is
 editable against this source; already-running processes were not restarted and
 natural SkillWave recovery remains unobserved.
+
+### Core Codex auth status observation
+
+Core `auth status openai-codex` helpers observe stored credentials from the first
+read. Status no longer runs pool maintenance before querying: the observational
+pool load/peek neither heals profile forks, seeds a singleton, prunes old DEAD
+rows, rotates selection/counts nor refreshes/adopts external credentials. The
+existing read-only resolver also passes its policy through store/global fallback
+and quota metadata reads. A corrupt/unreadable auth store reports an error rather
+than copying, replacing or repairing it. Stored login metadata is not proof that
+an expired token currently works. Normal runtime healing, seeding, pruning,
+refresh and recovery retain their defaults.
+
+Status config consumers use `load_config_readonly(observe_only=True)`, reusing
+the existing effective merge, environment expansion, managed overlay, explicit
+endpoint ownership and last-known-good recovery. This policy skips home/SOUL
+initialization and good/corrupt backup publication, including the logged-out
+external-login notice. It does not prime ordinary loader caches. An observational
+parse warning has a separate deduplication key so it cannot suppress a later
+runtime warning/backup. Ordinary config loads still initialize and back up as
+before; no new config store or provider/grant policy was introduced.
+
+On 2026-09-30 UTC, the final six selected files passed 80 cases through
+`scripts/run_tests.sh`: 34 status/config observations plus 46 existing profile-fork,
+runtime recovery, auth read-failure, config backup and cache-lock controls. All
+authentication/network boundaries used fake data/adapters and temporary homes.
+Ruff was 0/0 against the fixed parent; type checking had no new stable diagnostic
+key, while existing diagnostics remain. The existing pinned-mtime cache case
+failed with both the SHA-verified parent config source and this source in isolated
+homes; that known failure remains outside this patch. Its one-time comparison
+code was removed before commit. Exact diff checks passed and the HKCU PATH
+value/type fingerprint remained `2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
+
+This is a helper boundary result. SkillWave invokes the complete CLI via
+`skill_wave_runtime_contract.py::run_automation_auth_preflight`, so it also pays
+the earlier `main.py` startup path. That path still reads `config_effective`
+with good-backup side effects, configures diagnostic files, sweeps shim/bytecode
+artifacts and, after a revision change, runs `BOOT_HOME_STEPS` (including config
+migration, plugin-cache invalidation, launcher/PATH exposure and a boot record).
+These startup owners were inspected but not changed here. The existing exact
+`venv_sync.is_auth_status_probe()` predicate is the proposed boundary for a
+separate minimal startup observation policy; normal startup/update behavior must
+remain intact. User-installed provider auth handlers keep their own contracts.
+Actual auth status, whole-CLI safety and natural SkillWave recovery were not
+executed or established. The installation is editable; running processes were
+not restarted and runtime adoption is not inferred from this source commit.

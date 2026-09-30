@@ -35,11 +35,11 @@ _OAUTH_DEFAULT_PROVIDERS = _OAUTH_CAPABLE_PROVIDERS - {"openrouter"}
 EXTERNAL_LOGIN_PROVIDERS = {"anthropic", "openai-codex"}
 
 
-def _get_custom_provider_entries() -> list[dict]:
+def _get_custom_provider_entries(*, read_only: bool = False) -> list[dict]:
     """Return configured provider entries with legacy and canonical pool IDs."""
     try:
-        from hermes_cli.config import get_compatible_custom_providers, load_config
-        config = load_config()
+        from hermes_cli.config import get_compatible_custom_providers, load_config, load_config_readonly
+        config = load_config_readonly(observe_only=True) if read_only else load_config()
     except Exception:
         return []
     result: list[dict] = []
@@ -61,14 +61,14 @@ def _configured_provider_entry(provider: str) -> dict | None:
     return next((e for e in _get_custom_provider_entries() if e["provider_key"].lower() == normalized), None)
 
 
-def _resolve_custom_provider_input(raw: str) -> str | None:
+def _resolve_custom_provider_input(raw: str, *, read_only: bool = False) -> str | None:
     """Resolve legacy names and keyed providers to their credential-pool ID."""
     normalized = (raw or "").strip().lower().replace(" ", "-")
     if not normalized:
         return None
     if normalized.startswith(CUSTOM_POOL_PREFIX):
         return normalized
-    for entry in _get_custom_provider_entries():
+    for entry in _get_custom_provider_entries(**({"read_only": True} if read_only else {})):
         # ``providers:`` entries already have a durable runtime slug; keep credentials under it
         # instead of leaking the legacy ``custom:`` identity into auth.json and discovery.
         provider_key = entry["provider_key"].lower()
@@ -84,9 +84,9 @@ _PROVIDER_ALIASES = {
     "xai-oauth": "xai-oauth", "x-ai-oauth": "xai-oauth", "xai-grok-oauth": "xai-oauth"}
 
 
-def _normalize_provider(provider: str) -> str:
+def _normalize_provider(provider: str, *, read_only: bool = False) -> str:
     normalized = (provider or "").strip().lower()
-    return (_PROVIDER_ALIASES.get(normalized) or _resolve_custom_provider_input(normalized)
+    return (_PROVIDER_ALIASES.get(normalized) or _resolve_custom_provider_input(normalized, **({"read_only": True} if read_only else {}))
             or auth_mod._plugin_aliases().get(normalized) or normalized)
 
 
@@ -544,10 +544,10 @@ def auth_list_command(args) -> None:
         _print_external_login_notice()
 
 
-def _print_external_login_notice() -> None:
+def _print_external_login_notice(*, read_only: bool = False) -> None:
     """One line telling the user why no Codex CLI / Claude Code login shows up when adoption is off."""
     from agent.credential_sources import EXTERNAL_LOGINS_NOT_ADOPTED_NOTICE, adopt_external_logins_enabled
-    if not adopt_external_logins_enabled():
+    if not adopt_external_logins_enabled(**({"observe_only": True} if read_only else {})):
         print(EXTERNAL_LOGINS_NOT_ADOPTED_NOTICE)
 
 
@@ -663,13 +663,12 @@ def auth_refresh_command(args) -> None:
 
 
 def auth_status_command(args) -> None:
-    provider = _normalize_provider(getattr(args, "provider", "") or "")
+    provider = _normalize_provider(getattr(args, "provider", "") or "", read_only=True)
     if not provider:
         raise SystemExit("Provider is required. Example: `hermes auth status spotify`.")
     if dispatch_plugin_auth("status", args, provider):
         return
-    if provider in auth_mod.SINGLE_USE_REFRESH_POOL_PROVIDERS:
-        load_pool(provider)  # runs the forked-grant heal first so the report reflects the consolidated grant
+    # Status observes the stored grant; consolidation belongs to runtime loading.
     status = auth_mod.get_auth_status(provider)
     _print_oauth_heal_notices()
     if status.get("free_tier"):
@@ -682,7 +681,7 @@ def auth_status_command(args) -> None:
         reason = status.get("error")
         print(f"{provider}: logged out" + (f" ({reason})" if reason else ""))
         if provider in EXTERNAL_LOGIN_PROVIDERS:
-            _print_external_login_notice()
+            _print_external_login_notice(read_only=True)
         return
     print(f"{provider}: logged in")
     for key in ("auth_type", "client_id", "redirect_uri", "scope", "expires_at", "api_base_url"):

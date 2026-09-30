@@ -67,7 +67,7 @@ def format_config_parse_failure(config_path: Path, exc: Exception, *, fallback: 
 
 
 def _warn_config_parse_failure(
-    config_path: Path, exc: Exception, *, fallback: str = "defaults") -> None:
+    config_path: Path, exc: Exception, *, fallback: str = "defaults", observe_only: bool = False) -> None:
     """Surface a config.yaml parse failure to log and stderr (once per file signature).
     Silent fallback to ``DEFAULT_CONFIG`` drops every user override, so this must be loud.
 
@@ -82,12 +82,15 @@ def _warn_config_parse_failure(
         _CONFIG_PARSE_FAILURES[str(config_path)] = (*sig, str(exc))
     except OSError:
         key = (str(config_path), 0, 0, 0, 0)
+    # A status warning must not consume the later runtime warning/backup.
+    if observe_only:
+        key = (*key, "observation")
     if key in _CONFIG_PARSE_WARNED:
         return
     _CONFIG_PARSE_WARNED.add(key)
     from hermes_cli.config_backups import backup_config
     # A read error leaves an intact file behind: no "corrupt" copy of a good file.
-    backup_path = None if isinstance(exc, OSError) else backup_config(config_path, "corrupt")
+    backup_path = None if observe_only or isinstance(exc, OSError) else backup_config(config_path, "corrupt")
     msg = format_config_parse_failure(config_path, exc, fallback=fallback)
     if backup_path is not None:
         msg += f" A copy of the broken file was saved to {backup_path}."

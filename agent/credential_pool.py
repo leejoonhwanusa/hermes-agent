@@ -53,7 +53,7 @@ from hermes_cli.auth import (
 logger = logging.getLogger(__name__)
 
 
-def _load_config_safe() -> Optional[dict]:
+def _load_config_safe(*, read_only: bool = False) -> Optional[dict]:
     """Load config.yaml read-only, returning None on any error.
 
     ``load_config_readonly()`` skips the deepcopy ``load_config()`` pays per
@@ -63,7 +63,7 @@ def _load_config_safe() -> Optional[dict]:
     try:
         from hermes_cli.config import load_config_readonly
 
-        return load_config_readonly()
+        return load_config_readonly(**({"observe_only": True} if read_only else {}))
     except Exception:
         return None
 
@@ -596,9 +596,9 @@ def _get_custom_provider_config(pool_key: str) -> Optional[Dict[str, Any]]:
     return next((entry for norm_name, entry in _iter_custom_providers() if norm_name == suffix), None)
 
 
-def get_pool_strategy(provider: str) -> str:
+def get_pool_strategy(provider: str, *, read_only: bool = False) -> str:
     """Return the configured selection strategy for a provider."""
-    config = _load_config_safe()
+    config = _load_config_safe(**({"read_only": True} if read_only else {}))
     strategies = config.get("credential_pool_strategies") if config else None
     if not isinstance(strategies, dict):
         return STRATEGY_FILL_FIRST
@@ -998,15 +998,16 @@ class _RefreshDone(Exception):
 
 
 class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin):
-    def __init__(self, provider: str, entries: List[PooledCredential]):
+    def __init__(self, provider: str, entries: List[PooledCredential], *, read_only: bool = False):
         self.provider = provider
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None
+        self._read_only = read_only
         # Ids of rows read via the global-root fallback (single-use OAuth
         # providers only); set by load_pool(), consumed by add_entry().
         self._borrowed_root_ids: Set[str] = set()
         self._persisted_token_pairs: Dict[str, Tuple[Any, Any]] = {}
-        self._strategy = get_pool_strategy(provider)
+        self._strategy = get_pool_strategy(provider, **({"read_only": True} if read_only else {}))
         # RLock: _replace_entry/_persist self-acquire it so the DEFERRED
         # single-use-token refresh path (network I/O outside the lock by
         # design) still serializes its pool mutations; in-lock callers
@@ -2043,6 +2044,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
 
     def _available_entries(
         self, *, clear_expired: bool = False, refresh: bool = False, model: Optional[str] = None,
+        read_only: bool = False,
     ) -> Tuple[List[PooledCredential], List[PooledCredential]]:
         """Return (available, pending_refresh) for entries not in cooldown.
 
@@ -2053,6 +2055,8 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         refreshes them outside the lock instead of stalling every pool
         consumer during cross-process flock acquisition + OAuth network I/O.
         """
+        if read_only and (clear_expired or refresh):
+            raise ValueError("an observational pool read cannot refresh or clear cooldowns")
         now = time.time()
         cleared_any = False
         entries_to_prune: List[str] = []
@@ -2065,7 +2069,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
             # unhydrated duplicate as an empty key.
             if entry.auth_type == AUTH_TYPE_API_KEY and not entry.runtime_api_key:
                 continue
-            synced = self._resync_stale_entry(entry)
+            synced = entry if read_only else self._resync_stale_entry(entry)
             if synced is not entry:
                 entry = synced
                 cleared_any = True
@@ -2074,7 +2078,7 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
                 # singleton-seeded ones stay (audit trail, and the seeder would
                 # re-create them anyway). DEAD never re-enters via TTL — only a
                 # write-side re-auth sync clears it.
-                if _is_manual_source(entry.source):
+                if not read_only and _is_manual_source(entry.source):
                     dead_at = entry.last_status_at or 0
                     if dead_at and now - dead_at > DEAD_MANUAL_PRUNE_TTL_SECONDS:
                         logger.warning(
@@ -2172,11 +2176,12 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         return entry, pending_refresh
 
     def peek(self) -> Optional[PooledCredential]:
+        """Observe availability without maintenance when loaded with read_only=True."""
         with self._lock:
             current = self._current_unlocked()
             if current is not None:
                 return current
-            available, _pending = self._available_entries()
+            available, _pending = self._available_entries(read_only=self._read_only)
             return available[0] if available else None
 
     def reclaim(self, credential_id: str, *, model: Optional[str] = None) -> Optional[PooledCredential]:
@@ -3036,8 +3041,17 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
     return seed.result
 
 
-def load_pool(provider: str) -> CredentialPool:
+def load_pool(provider: str, *, read_only: bool = False) -> CredentialPool:
+    """Load runtime credentials, or observe persisted rows without repair/seeding.
+
+    An observational pool is for status peek only; a missing pool stays missing
+    so the status resolver can report the existing singleton authority as-is.
+    """
     provider = (provider or "").strip().lower()
+    if read_only:
+        raw_entries = read_credential_pool(provider, read_only=True)
+        return CredentialPool(provider, [PooledCredential.from_dict(provider, row) for row in raw_entries],
+                              read_only=True)
     if provider in SINGLE_USE_REFRESH_POOL_PROVIDERS:
         # One-time heal for installs that forked this grant across profiles
         # before the clone-strip / root write-through existed (#100339).

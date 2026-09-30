@@ -1316,7 +1316,7 @@ def _pool_first_oauth_status(
     from hermes_cli.auth import _auth_file_path
     try:
         from agent.credential_pool import load_pool
-        pool = load_pool(provider_id)
+        pool = load_pool(provider_id, read_only=True)
         if pool and pool.has_credentials():
             entry = pool.peek()
             if entry is not None:
