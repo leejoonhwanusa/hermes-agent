@@ -15,14 +15,23 @@ from pm.environments import runtime_facts_path
 
 @pytest.fixture(autouse=True)
 def _no_tool_downloads(monkeypatch):
-    """The launch sync publishes lockfile tools first; these tests cover the sync decision."""
+    """Keep launch-sync tests off downloads and the persistent Windows User PATH."""
     import pm.client
+    from hermes_cli import _launchers
+
+    path_requests: list[Path] = []
+
+    def register(entry: Path) -> str:
+        path_requests.append(entry)
+        return "added"
 
     monkeypatch.setattr(pm.client, "ensure_tools_for_sync", lambda: None)
+    monkeypatch.setattr(_launchers, "_register_windows_user_path", register)
+    return path_requests
 
 
 @pytest.fixture
-def completion_tail(monkeypatch):
+def completion_tail(monkeypatch, _no_tool_downloads):
     """Record the source-completion child prepare_launch spawns after a sync instead of running it.
 
     The real child is ``hermes_cli/source_completion.py`` from the checkout under test — a
@@ -32,8 +41,10 @@ def completion_tail(monkeypatch):
     class Spawned(list):
         exit_code = 0
         kwargs: dict = {}
+        path_requests: list[Path]
 
     spawned = Spawned()
+    spawned.path_requests = _no_tool_downloads
 
     def call(command, **kwargs):
         spawned.append(command)
@@ -113,6 +124,8 @@ def test_completion_tail_output_stays_off_stdout(tmp_path, monkeypatch, completi
     monkeypatch.setattr(_launchers, "resolve_store_python", lambda _: Path(sys.executable))
     venv_sync.prepare_launch(root, [])
     assert completion_tail.kwargs["stdout"] is sys.__stderr__
+    if sys.platform == "win32":
+        assert completion_tail.path_requests == [tmp_path / "home" / "bin"]
 
 
 def test_first_launch_syncs_without_marker_then_uses_completion_fact(tmp_path, monkeypatch, completion_tail):
@@ -145,6 +158,8 @@ def test_first_launch_syncs_without_marker_then_uses_completion_fact(tmp_path, m
     assert venv_sync.prepare_launch(root, []) == Path(sys.executable)
     assert calls == [(["all"], {"explicit": True, "project_root": root, "evict_incompatible_plugins": True})]
     assert not (root / ".update-incomplete").exists()
+    if sys.platform == "win32":
+        assert completion_tail.path_requests == [tmp_path / "home" / "bin"]
     assert any("source_completion.py" in str(part) for cmd in completion_tail for part in cmd)
     assert venv_sync.prepare_launch(root, []) is None
     assert len(calls) == 1
@@ -234,6 +249,8 @@ def test_blessed_legacy_install_is_adopted_before_sync(tmp_path, monkeypatch, co
     assert venv_sync.prepare_launch(root, []) == Path(sys.executable)
     assert json.loads((root / "install-stamp.json").read_text())["source"] == "adoption"
     assert calls == [(["all"],)]
+    if sys.platform == "win32":
+        assert completion_tail.path_requests == [home / "bin"]
 
 
 def test_relaunch_runs_zip_launchers_and_preserves_interpreter_options(tmp_path):

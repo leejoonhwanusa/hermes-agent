@@ -82,3 +82,19 @@ return. Focused existing tests cover dirty ZIP checks/grafts, snapshots, fleet
 reconciliation, supervisor timing and historical imports. Native service restart
 and Windows/macOS acceptance remain separate required lanes; no live user service
 or user state is touched by this implementation's test runs.
+
+The launch-completion unit tests keep real launcher publication inside temporary
+homes but replace `_register_windows_user_path` in their autouse fixture. A
+scratch `HERMES_HOME` alone does not isolate `HKCU\Environment\Path`: successful
+publication otherwise persists that scratch home's `bin` in the operator's User
+PATH. The three existing first-launch/completion/adoption tests assert the native
+Windows registration request against the fixture's recorded entries. Normal
+installer registration and the upper-level opt-in completion fixture are unchanged;
+previously persisted scratch entries require a separate, explicitly scoped cleanup.
+
+Local verification on 2026-09-30 (UTC): the three existing tests reproduced the
+registration requests with a boundary double and passed again after autouse
+isolation; all 20 tests in `test_update_launch_completion.py` passed through
+`scripts/run_tests.sh`. Focused base/head ruff and ty diagnostics were both zero.
+The raw HKCU PATH value and registry value type had identical SHA-256 fingerprints
+before reproduction and after validation; no existing PATH entries were cleaned.
