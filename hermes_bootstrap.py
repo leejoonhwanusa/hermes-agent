@@ -524,7 +524,9 @@ class RelaunchExit(SystemExit):
     relaunched = True
 
 
-from pm.environments import activate_dependencies, install_state_permission_message
+from pm.environments import (
+    activate_dependencies, activation_input_mtimes, install_state_permission_message, runtime_facts_path,
+)
 from hermes_cli._early_recovery import recover_if_needed
 
 from hermes_cli._parser import command_argv
@@ -532,9 +534,12 @@ from hermes_cli._parser import command_argv
 # Repair needs only stdlib. Do not activate the damaged tree to reach it.
 _pm_repair = command_argv(sys.argv[1:])[:2] == ["pm", "repair"]
 if not _pm_repair:
-    from hermes_cli.venv_sync import prepare_launch, relaunch_command
+    from hermes_cli.venv_sync import RuntimeNotReady, is_auth_status_probe, prepare_launch, relaunch_command
 
     try:
+        _status_probe = is_auth_status_probe(sys.argv[1:])
+        _status_facts = runtime_facts_path(_root).read_bytes() if _status_probe else None
+        _status_inputs = activation_input_mtimes(_root) if _status_probe else None
         _launch_python = prepare_launch(_root, sys.argv[1:])
         if _launch_python is not None:
             _main_spec = getattr(sys.modules.get("__main__"), "__spec__", None)
@@ -547,7 +552,13 @@ if not _pm_repair:
 
                 raise RelaunchExit(subprocess.call(_command))
             os.execv(str(_launch_python), _command)
+    except RuntimeNotReady as exc:
+        print(f"hermes: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
     except Exception as exc:
+        if is_auth_status_probe(sys.argv[1:]):
+            print(f"hermes: runtime-not-ready: launch verification failed ({type(exc).__name__})", file=sys.stderr)
+            raise SystemExit(1) from None
         if isinstance(exc, PermissionError) and (message := install_state_permission_message(_root, exc)):
             print(f"hermes: {message}", file=sys.stderr)
             raise SystemExit(1) from None
@@ -559,9 +570,19 @@ if not _pm_repair:
               "running with the previous dependencies — run `hermes update` to finish it",
               file=sys.stderr)
     try:
-        recover_if_needed(_root)
-        activate_dependencies(_root)
+        if _status_probe:
+            activate_dependencies(_root, read_only=True,
+                                  expected_facts=_status_facts, expected_inputs=_status_inputs)
+        else:
+            recover_if_needed(_root)
+            activate_dependencies(_root)
     except (RuntimeError, OSError) as exc:
+        if is_auth_status_probe(sys.argv[1:]):
+            detail = str(exc)
+            if not detail.startswith("runtime-not-ready:"):
+                detail = f"runtime-not-ready: dependency activation failed ({type(exc).__name__})"
+            print(f"hermes: {detail}; run `hermes pm repair`", file=sys.stderr)
+            raise SystemExit(1) from None
         if isinstance(exc, PermissionError) and (message := install_state_permission_message(_root, exc)):
             print(f"hermes: {message}", file=sys.stderr)
             raise SystemExit(1) from None

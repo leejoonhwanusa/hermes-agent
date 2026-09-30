@@ -302,7 +302,9 @@ def _require_own_dependencies(project_root: Path) -> None:
         raise RuntimeError("no dependency environment is committed for this install")
 
 
-def activate_dependencies(project_root: Path) -> None:
+def activate_dependencies(project_root: Path, *, read_only: bool = False,
+                          expected_facts: bytes | None = None,
+                          expected_inputs: dict[str, int] | None = None) -> None:
     """Select the committed tree at process boot, before third-party imports.
 
     A process with no extension selection keeps its original launch contract.
@@ -311,18 +313,43 @@ def activate_dependencies(project_root: Path) -> None:
     import sys
 
     state = install_state_dir(project_root)
+    if read_only and (not state.is_dir() or expected_facts is None or expected_inputs is None):
+        raise RuntimeError("runtime-not-ready: observed dependency selection is unavailable")
+
+    def require_observed_state() -> None:
+        if any(path.exists() for path in (
+            state / "publication.json", state / "source-completion-pending", state / ".repair-incomplete",
+            project_root / ".update-incomplete", project_root / ".lazy-refresh-incomplete",
+        )):
+            raise RuntimeError("runtime-not-ready: dependency publication or preparation is incomplete")
+        if (runtime_facts_path(project_root).read_bytes() != expected_facts
+                or activation_input_mtimes(project_root) != expected_inputs):
+            raise RuntimeError("runtime-not-ready: dependency selection or inputs changed during verification")
+
     if state.is_dir():
         from hermes_cli.runtime_state import runtime_lock, recover_publication, lease_generation
         # The lock's holder may be another profile's backend running a full dependency rebuild;
         # this process only reads the committed selection, so it proceeds without waiting rather
         # than leaving the backend unbound (see runtime_lock).
-        with runtime_lock(project_root) as held:
-            if held:
+        with runtime_lock(project_root, **({"timeout": 0} if read_only else {})) as held:
+            if read_only:
+                if not held:
+                    raise RuntimeError("runtime-not-ready: dependency publication lock is held")
+                require_observed_state()
+            elif held:
                 recover_publication(project_root)
             environment = committed_venv(project_root)
             if environment is None:
+                if read_only:
+                    raise RuntimeError("runtime-not-ready: no dependency environment is committed")
                 return _require_own_dependencies(project_root)
             release = lease_generation(environment)
+            if read_only:
+                try:
+                    require_observed_state()
+                except BaseException:
+                    release()
+                    raise
             # Without the lock, an installer may commit a new generation between the
             # read and the lease, leaving the leased one unselected and collectable.
             while not held and (current := committed_venv(project_root)) not in (None, environment):

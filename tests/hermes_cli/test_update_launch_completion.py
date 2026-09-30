@@ -351,3 +351,215 @@ def test_long_source_completion_does_not_start_another_tail(tmp_path, monkeypatc
     with pytest.raises(RuntimeError, match="dependencies changed"):
         complete_source_checkout(root, desktop=False, assume_yes=True)
     assert pending.is_file()
+
+@pytest.mark.parametrize("case", [
+    "ready", "relaunch", "stale", "pending", "missing", "corrupt", "error",
+    "worker-success", "worker-error", "worker-corrupt", "worker-no-response",
+    "worker-late-response", "worker-default",
+    "activation-ready", "activation-lock", "activation-journal-race",
+    "activation-facts-race", "activation-lease-race", "activation-input-race", "activation-default",
+])
+def test_auth_status_preparation_policy(tmp_path, monkeypatch, completion_tail, case):
+    """Exact status never starts maintenance; its canonical probe owns a finite budget."""
+    import io
+    import pm
+    import pm.client
+    import pm.receipt
+    import pm.registry
+    from hermes_cli import _launchers
+    from pm.environments import install_state_dir, site_packages
+
+    root = _self_checkout(tmp_path, monkeypatch)
+    if case.startswith("activation-"):
+        from contextlib import contextmanager
+        import site
+        import pm.environments as environments
+        from hermes_cli import runtime_state
+
+        state = install_state_dir(root)
+        environment = state / "environments" / "fixture" / "venv"
+        environment.mkdir(parents=True)
+        (environment / "pyvenv.cfg").write_text("version = 3.14.7\n")
+        selected = site_packages(environment)
+        selected.mkdir(parents=True)
+        facts = runtime_facts_path(root)
+        facts.write_text(json.dumps({"packages": {"venv": {"environment": str(environment)}}}))
+        snapshot = facts.read_bytes()
+        inputs = environments.activation_input_mtimes(root)
+        events = []
+        @contextmanager
+        def lock(project, **kwargs):
+            assert project == root
+            assert kwargs == ({} if case == "activation-default" else {"timeout": 0})
+            events.append("lock")
+            if case == "activation-journal-race":
+                (state / "publication.json").write_text("{}")
+            elif case == "activation-facts-race":
+                facts.write_bytes(snapshot + b" ")
+            yield case != "activation-lock"
+        def recover(project):
+            assert case == "activation-default"
+            events.append("recover")
+        def lease(project):
+            assert project == environment
+            events.append("lease")
+            if case == "activation-lease-race":
+                facts.write_bytes(snapshot + b" ")
+            elif case == "activation-input-race":
+                (root / "pyproject.toml").write_text("[project]\nname='changed'\n")
+            return lambda: events.append("release")
+        monkeypatch.setattr(runtime_state, "runtime_lock", lock)
+        monkeypatch.setattr(runtime_state, "recover_publication", recover)
+        monkeypatch.setattr(runtime_state, "lease_generation", lease)
+        monkeypatch.setattr(site, "addsitedir", lambda path: events.append("site"))
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+        if case == "activation-default":
+            environments.activate_dependencies(root)
+            assert events == ["lock", "recover", "lease", "site"]
+        elif case == "activation-ready":
+            environments.activate_dependencies(root, read_only=True,
+                                              expected_facts=snapshot, expected_inputs=inputs)
+            assert events == ["lock", "lease", "site"]
+            assert str(selected) in sys.path
+        else:
+            with pytest.raises(RuntimeError, match="runtime-not-ready"):
+                environments.activate_dependencies(root, read_only=True,
+                                                  expected_facts=snapshot, expected_inputs=inputs)
+            assert "recover" not in events and "site" not in events
+            assert events == (["lock", "lease", "release"] if case in {
+                "activation-lease-race", "activation-input-race"} else ["lock"])
+        return
+    if case.startswith("worker-"):
+        client = pm.client
+        now = [0.0]
+        events = []
+        accepted = []
+        class Wire(io.StringIO):
+            def readline(self, size: int = -1, /) -> str:
+                return process.readline()
+        class Process:
+            returncode = None
+            def __init__(self):
+                self.stdin = io.StringIO()
+                self.stdout = Wire()
+            def response(self, message):
+                if case == "worker-corrupt":
+                    return "invalid JSON"
+                result = {"id": message["id"], "type": "result", "result": True}
+                if case == "worker-error":
+                    result["error"] = {"type": "ValueError", "message": "fixture corrupt facts"}
+                return json.dumps(result) + "\n"
+            def readline(self):
+                events.append(("readline", None))
+                return self.response(json.loads(self.stdin.getvalue()))
+            def poll(self):
+                return self.returncode
+            def kill(self):
+                events.append(("kill", None))
+                self.returncode = -9
+            def wait(self, timeout: float | None = None):
+                events.append(("wait", timeout))
+                if case == "worker-default":
+                    self.returncode = 0
+                    return 0
+                assert timeout is not None
+                if self.returncode == -9:
+                    now[0] += 0.25
+                    return -9
+                self.message = json.load(self.stdin)
+                assert self.message["operation"] == "venv_is_current"
+                if case == "worker-no-response":
+                    now[0] += timeout
+                    raise subprocess.TimeoutExpired("fixture worker", timeout)
+                if case == "worker-late-response":
+                    now[0] += timeout + 0.1
+                self.stdout.write(self.response(self.message))
+                self.stdout.flush()
+                self.returncode = 0
+                return 0
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.stdin.close()
+                self.stdout.close()
+
+        process = Process()
+        monkeypatch.setattr(client.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(client, "is_runtime", lambda: False)
+        monkeypatch.setattr(client, "runtime_environment", lambda: {})
+        def command(spec, *args):
+            assert spec.bootstrap == "never"
+            return ["fixture worker"]
+        monkeypatch.setattr(client, "_worker_command", command)
+        def popen(*args, **kwargs):
+            if case != "worker-default":
+                process.stdin, process.stdout = kwargs["stdin"], kwargs["stdout"]
+            return process
+        monkeypatch.setattr(client.subprocess, "Popen", popen)
+        monkeypatch.setattr(pm.registry, "package_definitions", lambda names: [])
+        monkeypatch.setattr(pm.receipt, "_ambient_update_id", lambda: None)
+        monkeypatch.setattr(pm.receipt, "accept_worker_receipt", lambda *a: accepted.append(a))
+        if case == "worker-default":
+            assert client.venv_is_current(project_root=root)
+            assert events == [("readline", None), ("wait", 5)]
+        else:
+            error = {"worker-error": ValueError, "worker-corrupt": ValueError,
+                     "worker-no-response": TimeoutError, "worker-late-response": TimeoutError}.get(case)
+            if error:
+                with pytest.raises(error):
+                    client.venv_is_current(project_root=root, timeout=10)
+            else:
+                assert client.venv_is_current(project_root=root, timeout=10)
+            assert events[0] == ("wait", 9)
+            assert ("readline", None) not in events and ("wait", 5) not in events
+            if case == "worker-no-response":
+                assert events == [("wait", 9), ("kill", None), ("wait", 1)]
+                assert now[0] == 9.25
+            if case == "worker-late-response":
+                assert not accepted
+            assert process.stdin.closed and process.stdout.closed
+            for stream in (process.stdin, process.stdout):
+                if isinstance(stream.name, str):
+                    assert not Path(stream.name).exists()
+            assert process.poll() is not None
+        return
+
+    fact = runtime_facts_path(root)
+    environment = install_state_dir(root) / "environments" / "fixture" / "venv"
+    environment.mkdir(parents=True)
+    (environment / "pyvenv.cfg").write_text("version = 3.14.7\n")
+    site_packages(environment).mkdir(parents=True)
+    fact.parent.mkdir(parents=True, exist_ok=True)
+    fact.write_text(json.dumps({"packages": {"venv": {
+        "stamp": "fixture", "extras": [], "environment": str(environment),
+    }}}))
+    if case == "pending":
+        venv_sync.completion_pending_path(root).write_text("fixture pending")
+    elif case == "missing":
+        fact.unlink()
+    elif case == "corrupt":
+        fact.write_text("invalid JSON")
+    calls = []
+    def current(**kwargs):
+        assert kwargs == {"project_root": root, "timeout": 10}
+        calls.append(kwargs)
+        if case == "error":
+            raise TimeoutError("fixture deadline")
+        return case != "stale"
+    monkeypatch.setattr(pm, "venv_is_current", current)
+    python = root / "managed-python" if case == "relaunch" else Path(sys.executable)
+    monkeypatch.setattr(_launchers, "resolve_store_python", lambda _: python)
+    monkeypatch.setattr(pm, "sync_venv", lambda *a, **kw: pytest.fail("status started sync"))
+    monkeypatch.setattr(venv_sync, "_finish_source_update", lambda *a, **kw: pytest.fail("status started completion"))
+    if case in {"ready", "relaunch"}:
+        assert venv_sync.prepare_launch(root, ["auth", "status", "openai-codex"]) == (
+            python if case == "relaunch" else None
+        )
+    else:
+        with pytest.raises(venv_sync.RuntimeNotReady, match="runtime-not-ready"):
+            venv_sync.prepare_launch(root, ["auth", "status", "openai-codex"])
+    assert len(calls) == (1 if case in {"ready", "relaunch", "stale", "error"} else 0)
+    assert not completion_tail and not completion_tail.path_requests

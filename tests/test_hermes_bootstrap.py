@@ -654,3 +654,113 @@ class TestNeverFreeEnviron:
             grown = tracemalloc.get_traced_memory()[0] - before
             assert grown < 64 * 1024, f"20k set/del of 4 names grew the heap by {grown} bytes"
         """)], check=True, cwd=str(Path(__file__).resolve().parents[1]), timeout=120)
+
+@pytest.mark.parametrize("case", ["not-ready", "unexpected-error", "activation-unavailable", "activation-lock", "ready", "ordinary-compatible"])
+def test_auth_status_bootstrap_failure_contract(tmp_path, case):
+    """Status fails before auth and never repairs; ordinary compatible fallback remains."""
+    import json
+
+    repo = Path(__file__).resolve().parents[1]
+    program = r"""
+import json, os, socket, subprocess, sys, types
+repo, case = sys.argv[1:]
+sys.path.insert(0, repo)
+sys.argv = ['hermes', 'auth', 'status', 'openai-codex'] if case != 'ordinary-compatible' else ['hermes', 'chat']
+events = []
+
+class RuntimeNotReady(RuntimeError): pass
+
+def forbidden(*args, **kwargs):
+    events.append('forbidden-side-effect')
+    raise AssertionError('unexpected real executor, credential, registry or network boundary')
+
+def prepare(root, argv):
+    assert argv == sys.argv[1:]
+    events.append('prepare')
+    if case == 'not-ready':
+        raise RuntimeNotReady('runtime-not-ready: fixture incomplete')
+    if case in ('unexpected-error', 'ordinary-compatible'):
+        raise RuntimeError('fixture source completion not ready')
+    return None
+
+def activate(root, *, read_only=False, expected_facts=None, expected_inputs=None):
+    assert read_only == (case != 'ordinary-compatible')
+    if read_only:
+        assert expected_facts == b'fixture facts' and expected_inputs == {}
+    events.append('activate')
+    if case == 'activation-unavailable':
+        raise RuntimeError('fixture committed runtime unavailable')
+    if case == 'activation-lock':
+        raise RuntimeError('runtime-not-ready: fixture publication lock is held')
+
+pm = types.ModuleType('pm'); pm.__path__ = []
+environments = types.ModuleType('pm.environments')
+environments.activate_dependencies = activate
+environments.activation_input_mtimes = lambda root: {}
+from pathlib import Path
+facts = Path(os.environ['HERMES_HOME']) / 'facts.json'
+facts.parent.mkdir(parents=True, exist_ok=True)
+facts.write_bytes(b'fixture facts')
+environments.runtime_facts_path = lambda root: facts
+environments.install_state_permission_message = lambda *a: None
+pm.environments = environments
+launch = types.ModuleType('hermes_cli.venv_sync')
+launch.prepare_launch = prepare
+launch.RuntimeNotReady = RuntimeNotReady
+launch.is_auth_status_probe = lambda argv: argv == ['auth', 'status', 'openai-codex']
+launch.relaunch_command = forbidden
+recovery = types.ModuleType('hermes_cli._early_recovery')
+recovery.recover_if_needed = lambda root: events.append('recover')
+auth = types.ModuleType('hermes_cli.auth')
+auth.get_auth_status = forbidden
+auth.heal_forked_single_use_oauth_grants = forbidden
+pool = types.ModuleType('agent.credential_pool'); pool.load_pool = forbidden
+sys.modules.update({'pm': pm, 'pm.environments': environments,
+                    'hermes_cli.venv_sync': launch, 'hermes_cli._early_recovery': recovery,
+                    'hermes_cli.auth': auth, 'agent.credential_pool': pool})
+socket.getaddrinfo = forbidden
+socket.socket = forbidden
+subprocess.Popen = forbidden
+subprocess.call = forbidden
+os.execv = forbidden
+if sys.platform == 'win32':
+    import winreg
+    winreg.OpenKey = forbidden
+try:
+    import hermes_bootstrap
+    events.append('auth-entry-stub')
+    simulated_exit = 0
+except SystemExit as exc:
+    simulated_exit = exc.code
+print(json.dumps({'case': case, 'argv': sys.argv[1:], 'events': events,
+                  'auth_entry_stub_count': events.count('auth-entry-stub'),
+                  'simulated_executor_exit': simulated_exit,
+                  'historical_cause_confirmed': False}))
+"""
+    env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP") if key in os.environ}
+    env.update({"HERMES_HOME": str(tmp_path / "home"), "HERMES_RUNTIME_DIR": str(tmp_path / "runtime"),
+                "HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PYTHONUTF8": "1",
+                "PYTHONDONTWRITEBYTECODE": "1"})
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", program, str(repo), case],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    trace = json.loads(result.stdout)
+    expected = {
+        "not-ready": (["prepare"], 1, 0),
+        "unexpected-error": (["prepare"], 1, 0),
+        "activation-unavailable": (["prepare", "activate"], 1, 0),
+        "activation-lock": (["prepare", "activate"], 1, 0),
+        "ready": (["prepare", "activate", "auth-entry-stub"], 0, 1),
+        "ordinary-compatible": (["prepare", "recover", "activate", "auth-entry-stub"], 0, 1),
+    }
+    events, exit_code, auth_count = expected[case]
+    assert trace["events"] == events
+    assert trace["simulated_executor_exit"] == exit_code
+    assert trace["auth_entry_stub_count"] == auth_count
+    if case == "ordinary-compatible":
+        assert "running with the previous dependencies" in result.stderr
+    elif case != "ready":
+        assert "runtime-not-ready" in result.stderr
+        assert "running with the previous dependencies" not in result.stderr
+    if case == "activation-lock":
+        assert "fixture publication lock is held" in result.stderr

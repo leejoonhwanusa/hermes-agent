@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 import uuid
 
 from pm import paths, plugin_inputs
@@ -88,7 +90,12 @@ def _raise_worker_error(error: dict):
     raise _WORKER_ERRORS.get(error["type"], RuntimeError)(error["message"])
 
 
-def _request(operation, arguments, *, callbacks=None, pause_event=None, project_root=None):
+def _request(operation, arguments, *, callbacks=None, pause_event=None, project_root=None, timeout: float | None = None):
+    # Ordinary requests retain their protocol; this budget is observational only.
+    deadline = None if timeout is None else time.monotonic() + timeout
+    if timeout is not None and (operation != "venv_is_current" or callbacks or pause_event is not None
+                                 or timeout <= 1):
+        raise ValueError("a bounded PM probe requires venv_is_current and a cleanup reserve")
     from pm import receipt
     from pm.registry import package_definitions
 
@@ -109,6 +116,46 @@ def _request(operation, arguments, *, callbacks=None, pause_event=None, project_
     worker = Path(__file__).with_name("worker.py").resolve()
     environment = runtime_environment()
     command = _worker_command(spec, arguments, worker, environment)
+    if deadline is not None:
+        # Exclusively created temporary files carry the same JSON protocol without
+        # blocking pipe writes or Windows communicate reader threads. They are
+        # ephemeral transport, not dependency metadata or a receipt store.
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as incoming, \
+                tempfile.TemporaryFile(mode="w+", encoding="utf-8") as outgoing:
+            incoming.write(json.dumps(message) + "\n")
+            incoming.seek(0)
+            remaining = deadline - time.monotonic() - 1
+            if remaining <= 0:
+                raise TimeoutError("PM currency probe deadline exhausted before launch")
+            process = subprocess.Popen(command, stdin=incoming, stdout=outgoing, env=environment)
+            try:
+                remaining = deadline - time.monotonic() - 1
+                if remaining <= 0:
+                    raise TimeoutError("PM currency probe deadline exhausted during launch")
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    raise TimeoutError("PM currency probe deadline exceeded") from None
+                if time.monotonic() >= deadline - 1:
+                    raise TimeoutError("PM currency probe returned after its response deadline")
+                outgoing.seek(0)
+                response = json.load(outgoing)
+                if response.get("id") != request_id or response.get("type") != "result":
+                    raise InstallError("pm", "invalid bounded probe response")
+                if process.returncode:
+                    raise InstallError("pm", "worker exited unsuccessfully")
+                receipt.accept_worker_receipt(response.get("receipt"), update_id)
+                if "error" in response:
+                    _raise_worker_error(response["error"])
+                if not isinstance(response.get("result"), bool):
+                    raise ValueError("PM currency probe returned a non-boolean result")
+                return response["result"]
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    # Reserve one second of the same budget for our owned worker.
+                    # No context-manager exit adds an unbounded process wait.
+                    process.wait(timeout=max(0, deadline - time.monotonic()))
     callback_error = None
     stopped = threading.Event()
     write_lock = threading.Lock()
@@ -350,14 +397,14 @@ def ensure_python_tool(
 
 
 def venv_is_current(*, extras: list[str] | None = None, plugins: Members | Candidates | None = None,
-                    project_root: Path | None = None) -> bool:
-    """Check through a ready PM, never bootstrap dependencies for a probe."""
-    if is_runtime() and (project_root is None or Path(project_root).resolve() == paths.repo_root().resolve()):
+                    project_root: Path | None = None, timeout: float | None = None) -> bool:
+    """Check through a ready PM; an optional probe budget includes worker cleanup."""
+    if timeout is None and is_runtime() and (project_root is None or Path(project_root).resolve() == paths.repo_root().resolve()):
         from pm.install import venv_is_current as direct
         return direct(extras=extras, plugins=plugins, project_root=project_root)
     try:
         return bool(_request("venv_is_current", {"extras": extras, "plugins": plugin_inputs.encode(plugins)},
-                             project_root=project_root))
+                             project_root=project_root, **({"timeout": timeout} if timeout is not None else {})))
     except InstallError as exc:
         if exc.package == "pm-runtime":
             return False  # Without its checker, currency cannot be established.

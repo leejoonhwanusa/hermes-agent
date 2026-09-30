@@ -236,6 +236,49 @@ def refuse_foreign_owned_venv(project_root: Path) -> None:
             )
 
 
+class RuntimeNotReady(RuntimeError):
+    """An observational status probe must not repair uncertain dependencies."""
+
+
+def is_auth_status_probe(argv: list[str]) -> bool:
+    from hermes_cli._parser import command_argv
+
+    return command_argv(argv) == ["auth", "status", "openai-codex"]
+
+
+def _prepare_auth_status(root: Path) -> Path | None:
+    import sys
+    import pm
+    from hermes_cli._launchers import resolve_store_python
+    from pm.environments import committed_venv, install_state_dir, site_packages
+
+    try:
+        state = install_state_dir(root)
+        if any(path.exists() for path in (
+            completion_pending_path(root), state / ".repair-incomplete", state / "publication.json",
+            root / ".update-incomplete", root / ".lazy-refresh-incomplete",
+        )):
+            raise RuntimeNotReady("runtime-not-ready: source preparation is incomplete; run `hermes update`")
+        environment = committed_venv(root)
+        if environment is None or not site_packages(environment).is_dir():
+            raise RuntimeNotReady("runtime-not-ready: committed dependencies are missing; run `hermes pm repair`")
+        python = resolve_store_python(root)
+        if python is None:
+            raise RuntimeNotReady("runtime-not-ready: managed Python is missing; run `hermes pm install`")
+        if not pm.venv_is_current(project_root=root, timeout=10):
+            raise RuntimeNotReady("runtime-not-ready: dependency inputs are stale; run `hermes update`")
+        # Preserve the interpreter/ABI without publishing launchers.
+        same = os.path.normcase(os.path.abspath(python)) == os.path.normcase(os.path.abspath(sys.executable))
+        return None if same else python
+    except RuntimeNotReady:
+        raise
+    except Exception as exc:
+        raise RuntimeNotReady(
+            f"runtime-not-ready: local dependency verification failed ({type(exc).__name__}); "
+            "run `hermes pm repair`"
+        ) from exc
+
+
 def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
     """Finish a self-managed source update before importing app dependencies.
 
@@ -252,6 +295,8 @@ def prepare_launch(project_root: Path, argv: list[str]) -> Path | None:
     from hermes_cli.steward import read_install_stamp
 
     root = Path(project_root).resolve()
+    if is_auth_status_probe(argv):
+        return _prepare_auth_status(root)
     if (command_argv(argv)[:1] == ["pm"]
             or _METADATA_FLAGS & set(argv)
             or os.environ.get("HERMES_DISABLE_LAZY_INSTALLS", "").lower() in ("1", "true", "yes")

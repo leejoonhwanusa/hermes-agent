@@ -98,3 +98,58 @@ isolation; all 20 tests in `test_update_launch_completion.py` passed through
 `scripts/run_tests.sh`. Focused base/head ruff and ty diagnostics were both zero.
 The raw HKCU PATH value and registry value type had identical SHA-256 fingerprints
 before reproduction and after validation; no existing PATH entries were cleaned.
+
+## Observational Codex provider status preparation
+
+The exact parsed command `auth status openai-codex` verifies an already committed
+runtime instead of adopting an install, syncing dependencies, finishing source
+completion or retrying early recovery. Missing/corrupt state, pending source or
+publication work, stale dependencies and probe errors exit nonzero with
+`runtime-not-ready`. Help/version, update and other commands retain their existing
+preparation and compatible-generation fallback. A ready status probe can re-enter
+the selected managed Python for ABI compatibility without publishing launchers.
+
+Dependency currency still uses PM's canonical `venv_is_current` stamp comparison
+(core lock, Python pin/target, extras and the selected plugin union). Its worker
+operation retains `bootstrap=never`. This command alone passes a ten-second request
+budget: the response/exit wait reserves the final second for killing and waiting
+for that request's owned worker. Late responses are rejected. Ordinary requests
+keep their existing pipe/callback protocol and default waits. Synchronous OS
+file/process creation cannot be preempted by this budget; elapsed preparation and
+launch time are checked before waiting. This is not a deadline for the whole
+auth handler.
+
+The bootstrap retains facts bytes and PM input mtimes in memory from before the
+probe. Observational activation tries the existing publication lock immediately;
+contention, pending journals, or facts/input drift before or after leasing fail
+before dependency imports. It performs no publication recovery/write. A failed
+post-lease check releases that lease; successful activation retains the normal
+generation lifetime lease. Input mtimes detect intervening edits, not currency:
+the canonical PM stamp remains the readiness authority. No new metadata store or
+lock is introduced.
+
+The bounded worker uses exclusively created standard-library temporary streams,
+closed/deleted on success and exceptions, with existing host temporary-file
+permissions (POSIX mode 0600; Windows host ACLs). The request carries PM operation,
+dependency inputs, import identities/paths and correlation metadata, not auth
+tokens or credentials. There are no client pipe-reader/monitor threads, persistent
+transport files, new servers or process-wide kill operations. The unchanged auth
+status handler can still call `load_pool()` for grant healing; this change does not
+make the entire auth command read-only.
+
+Local verification uses only the two existing launch/bootstrap test boundaries,
+temporary homes, fake PM/process/auth/registry/network adapters and a virtual
+clock. It covers currency success/stale/pending/missing/corrupt/error, no/late
+worker response, bounded owned-worker cleanup, unchanged default requests,
+publication/selection/input races, lock contention, normal lease and ordinary
+activation/fallback. The earlier synthetic stall showed a preparation risk, not
+the historical SkillWave timeout's proven cause. Actual auth status, natural
+SkillWave recovery and service/runtime adoption were not executed for this change.
+
+Verification for this status change on 2026-09-30 (UTC): 39 launch cases plus the
+new managed-Python handoff case passed, alongside the six affected bootstrap
+failure/normal cases and six existing entrypoint-order cases. All ran through
+`scripts/run_tests.sh`. Base/head ruff diagnostics were zero; ty retained the same
+23 pre-existing diagnostics, with no new issue. The post-cleanup raw HKCU PATH
+and type fingerprint stayed `2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
+No additional registry cleanup was performed by this change.
