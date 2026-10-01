@@ -324,3 +324,49 @@ or local config I/O of the full command. The installation remains editable;
 running processes and previously generated launchers were not restarted or
 replaced. A separately authorized natural whole-command/SkillWave observation
 with confirmed entrypoint policy is still required for runtime recovery claims.
+
+### Bounded installed SkillWave launcher adoption and status observation
+
+On 2026-10-01 UTC, SkillWave's common-install resolver and its recorded consumer
+both selected `hermes-agent/venv/Scripts/hermes.exe`, ahead of the user-bin PATH
+command. Its old uv trampoline directly embedded the venv interpreter and plain
+main import, without the observational bytecode policy. The existing production
+`stage_launcher("hermes", source_root, target.parent)` API publishes that one
+command; the standalone materializer CLI would also publish ACP/local commands
+and was not used. Two existing isolated native republication controls passed.
+
+After a file-hash guard and executable-only local backup, that exact executable
+was republished through the official API. Its embedded script matches source
+`5878109e4375fff0d6bfd667216e8c1b208f5012` and binds the committed PM store Python,
+with the exact-status observational bytecode classifier. Only `hermes.exe` changed
+among its sibling files. ACL and HKCU PATH fingerprints stayed unchanged; user-bin
+launchers, ACP, package selections, auth/config, services and process/system PATH
+were not published, repaired or restarted.
+
+The actual native consumer then ran `auth status openai-codex` exactly once with
+SkillWave's existing command/cwd/child-environment/owned Job cleanup boundary.
+No production function, WinReg call or dependency probe was monkeypatched. The
+real command used its canonical bounded PM currency and observational activation;
+it returned exit 0 in 7.739346 seconds, without timeout/runtime-not-ready, and
+reported the stored provider as logged in. Raw stdout/stderr and credential values
+were discarded; only the provider verdict and bounded diagnostics were retained.
+Auth store/lock, config/dotenv/SOUL/clean mark and PM/tool facts fingerprints were
+unchanged. No new installation Python process or temporary transport entry remained.
+
+Home-directory metadata changed concurrently while existing services remained
+running. This observation does not assert global home quiescence or attribute
+those writes to the status command. The metadata observer initially called the config reader
+before dependency activation under bare store Python and lacked `ruamel`; the
+existing verified project test interpreter was used only for observational config
+preconditions/outer observation. The actual CLI always used the exact native
+launcher and canonical store/runtime preparation. No install, sync or dependency
+bypass was used. Observer ACL/tool-loading errors occurred before launcher writes
+or actual status invocation and are not counted as runtime/auth probe attempts.
+
+This closes the actual local provider-status boundary for the observed source,
+launcher and state. Stored login metadata does not prove an upstream authentication
+exchange, a model request, full SkillWave Preview/Apply or past timeout causality.
+No such requests, login/refresh/adoption, automatic healing, service restart or push
+were executed. Source/runtime identity, old/new executable fingerprints, backup and
+the one-shot observation are retained in the local external audit; no credential
+file or value was copied into that audit.
