@@ -112,8 +112,12 @@ def _classify_entrypoint_value_kind(value: str) -> str:
 def _get_disabled_plugins() -> set:
     """Read ``plugins.disabled`` — a deny-list that wins over ``plugins.enabled``."""
     try:
-        from hermes_cli.config import load_config
-        disabled = cfg_get(load_config(), "plugins", "disabled", default=[])
+        import sys
+        from hermes_cli.config import load_config, load_config_readonly
+        from hermes_cli.venv_sync import is_auth_status_probe
+        # Provider discovery runs on auth's first import, before main dispatch.
+        config = load_config_readonly(observe_only=True) if is_auth_status_probe(sys.argv[1:]) else load_config()
+        disabled = cfg_get(config, "plugins", "disabled", default=[])
         return set(disabled) if isinstance(disabled, list) else set()
     except Exception:
         return set()
@@ -124,8 +128,12 @@ def _get_enabled_plugins() -> Optional[set]:
     enabled yet"; the first ``migrate_config`` run grandfathers installed user plugins); ``set()`` = explicitly
     empty; else the allow-list."""
     try:
-        from hermes_cli.config import load_config
-        enabled = cfg_get(load_config(), "plugins", "enabled")
+        import sys
+        from hermes_cli.config import load_config, load_config_readonly
+        from hermes_cli.venv_sync import is_auth_status_probe
+        # Provider discovery runs on auth's first import, before main dispatch.
+        config = load_config_readonly(observe_only=True) if is_auth_status_probe(sys.argv[1:]) else load_config()
+        enabled = cfg_get(config, "plugins", "enabled")
         return set(enabled) if isinstance(enabled, list) else None
     except Exception:
         return None

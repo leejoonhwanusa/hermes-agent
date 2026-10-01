@@ -540,6 +540,9 @@ def test_exact_status_real_cli_startup_and_dispatch_observe_only(observed_auth_s
     import hermes_cli.update_cmd_fleet as fleet
     import pm.environments as environments
 
+    from hermes_cli import auth_commands, auth_plugin_providers
+    monkeypatch.setattr(auth_commands, "dispatch_plugin_auth", auth_plugin_providers.dispatch_plugin_auth)
+
     ordinary = case.startswith("ordinary-")
     root, auth_events = observed_auth_store("healthy" if ordinary or case in {"missing", "corrupt-config", "interrupted", "interrupted-unreadable"} else case)
     home = Path(os.environ["HERMES_HOME"])
@@ -679,11 +682,17 @@ def test_exact_status_cold_process_uses_real_startup(case, tmp_path):
     script = r"""
 import contextlib, importlib.util, io, os, pathlib, sys, types
 import pytest
-base = pathlib.Path(sys.argv[1])
-sys.path.insert(0, sys.argv[2])
-spec = importlib.util.spec_from_file_location('status_fixture', sys.argv[3])
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+base, repo, fixture, case = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, repo)
+# Auth's first import discovers providers; classify before importing the fixture.
+sys.argv = ['hermes', 'auth', 'status', 'openai-codex']
+process_home = pathlib.Path(os.environ['HERMES_HOME'])
+def snapshot():
+    return {str(p.relative_to(process_home)): (p.read_bytes() if p.is_file() else None)
+            for p in process_home.rglob('*')}
+initial = snapshot()
+def forbidden(*args, **kwargs):
+    raise AssertionError('unexpected external request')
 out, err = io.StringIO(), io.StringIO()
 class Capture:
     def readouterr(self):
@@ -691,10 +700,27 @@ class Capture:
         out.seek(0); out.truncate(); err.seek(0); err.truncate()
         return result
 with pytest.MonkeyPatch.context() as patch:
+    import socket, urllib.request
+    patch.setattr(socket.socket, 'connect', forbidden)
+    patch.setattr(socket, 'create_connection', forbidden)
+    patch.setattr(urllib.request, 'urlopen', forbidden)
+    # Real bootstrap body stays in the chain; only its operational PM leaves are fake.
+    import hermes_cli.venv_sync as venv_sync
+    import pm.environments as environments
+    fact = base / 'initial-facts.json'
+    fact.write_text('{}', encoding='utf-8')
+    patch.setattr(venv_sync, 'prepare_launch', lambda *a, **kw: None)
+    patch.setattr(environments, 'activate_dependencies', lambda *a, **kw: None)
+    patch.setattr(environments, 'runtime_facts_path', lambda *a: fact)
+    spec = importlib.util.spec_from_file_location('status_fixture', fixture)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert snapshot() == initial, 'first provider import mutated the synthetic home'
     seed = module.observed_auth_store.__wrapped__(base, patch)
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         module.test_exact_status_real_cli_startup_and_dispatch_observe_only(
-            seed, patch, Capture(), sys.argv[4], base)
+            seed, patch, Capture(), case, base)
+assert snapshot() == initial, 'startup mutated the initial synthetic home'
 print('cold-status-observation-ok')
 """
     env = {**os.environ, "HERMES_HOME": str(home), "CODEX_HOME": str(tmp_path / "unused-codex"),
@@ -705,3 +731,51 @@ print('cold-status-observation-ok')
                             env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "cold-status-observation-ok"
+
+
+@pytest.mark.parametrize("case", ["missing", "config", "overlay", "corrupt", "empty", "malformed"])
+def test_status_first_discovery_preserves_plugin_gates_without_initialization(observed_config_home, monkeypatch, case):
+    import sys
+    from hermes_cli import plugins_discovery
+
+    home, config = observed_config_home
+    monkeypatch.setattr(sys, "argv", ["hermes", "auth", "status", "openai-codex"])
+    expected_enabled, expected_disabled = None, set()
+    if case != "missing":
+        home.mkdir()
+        content = {"corrupt": "plugins: [unterminated", "empty": "plugins:\n  enabled: []\n",
+                   "malformed": "plugins:\n  enabled: true\n  disabled: nope\n"}.get(
+                       case, "plugins:\n  enabled: [allowed, denied]\n  disabled: [denied]\n")
+        (home / "config.yaml").write_text(content, encoding="utf-8")
+        if case in {"config", "overlay"}:
+            expected_enabled, expected_disabled = {"allowed", "denied"}, {"denied"}
+        elif case == "empty":
+            expected_enabled = set()
+    if case == "overlay":
+        monkeypatch.setattr(config.managed_scope, "load_managed_config", lambda: {
+            "plugins": {"enabled": ["managed", "denied"], "disabled": ["denied"]}})
+        expected_enabled = {"managed", "denied"}
+    before = _auth_manifest(home)
+    directories = tuple(sorted(str(p.relative_to(home)) for p in home.rglob("*") if p.is_dir()))
+    mtimes = {str(p.relative_to(home)): p.stat().st_mtime_ns for p in home.rglob("*") if p.is_file()}
+    for _ in range(2):
+        assert plugins_discovery._get_enabled_plugins() == expected_enabled
+        assert plugins_discovery._get_disabled_plugins() == expected_disabled
+    assert _auth_manifest(home) == before
+    assert tuple(sorted(str(p.relative_to(home)) for p in home.rglob("*") if p.is_dir())) == directories
+    assert {str(p.relative_to(home)): p.stat().st_mtime_ns for p in home.rglob("*") if p.is_file()} == mtimes
+    assert not config._LOAD_CONFIG_CACHE
+    if case == "missing":
+        assert not home.exists()
+
+
+@pytest.mark.parametrize("argv", [["auth", "status", "nous"], ["--version"]])
+def test_other_invocations_keep_plugin_config_initialization(observed_config_home, monkeypatch, argv):
+    import sys
+    from hermes_cli import plugins_discovery
+
+    home, _ = observed_config_home
+    monkeypatch.setattr(sys, "argv", ["hermes", *argv])
+    assert plugins_discovery._get_enabled_plugins() is None
+    assert plugins_discovery._get_disabled_plugins() == set()
+    assert (home / "SOUL.md").is_file()

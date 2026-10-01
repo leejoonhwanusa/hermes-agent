@@ -268,6 +268,19 @@ on disk or resolve external secret-manager sources. It has no terminal execution
 consumer, so it does not initialize the terminal config bridge. No separate
 config reader/store or auth/permission policy was introduced.
 
+Auth's first import registers provider profiles through `providers.list_providers()`.
+Entry-point discovery consults `plugins_discovery._get_enabled_plugins()` and
+`_get_disabled_plugins()` even when no plugin is enabled. For exact status these
+two gates now use the existing `load_config_readonly(observe_only=True)` reader;
+ordinary discovery still uses `load_config()`. Allow/deny lists, empty/malformed
+values, managed overlay and deny-list precedence keep their existing meaning.
+Observation does not prime the ordinary config cache or initialize a missing home.
+The earlier cold fixture imported auth before setting status argv and missed this
+first-import boundary. The corrected fixture sets argv before any auth import,
+blocks network/PM leaves and checks the initial synthetic home as well as the
+dispatch home. Its pre-fix missing-home case failed on first-import mutation;
+all three corrected cold-process variants now pass through real plugin dispatch.
+
 `runtime_command()` adds `-B` for the exact main command. Newly generated source
 launchers classify argv with bytecode writing temporarily disabled, retain that
 policy for exact status and restore the ordinary policy for other invocations.
@@ -291,11 +304,17 @@ auth maintenance requests and expected dispatch results are checked; external
 authentication/network requests are blocked. The ordinary version control keeps
 its existing metadata-probe behavior against that blocked fake boundary.
 
-Across scoped canonical runs, 134 distinct cases in eight existing test files
-passed (unchanged helper selections were retained). The final affected startup
-selection passed all 15 cases. Ruff has no issues
-and fixed-parent type lint has no new stable diagnostic (68 existing diagnostics
-remain). The HKCU PATH value/type fingerprint stayed
+Across scoped canonical runs, 146 distinct cases in ten existing test files
+passed (unchanged focused checks were retained). The final observation file passed
+all 57 cases, including the corrected first-import/cold startup cases and eight
+plugin-gate observation/default controls; four existing provider discovery controls
+also passed. The unchanged `test_bundled_plugins_discovered` directory-inventory
+check failed because the untracked `opencode-free` directory lacks `__init__.py`.
+Its identical fixed-parent function failed on the same metadata without importing
+provider/config code; this unrelated directory was preserved. Ruff has no issues. The original startup owner selection carries
+68 existing type diagnostics with no new stable diagnostic; the follow-up plugin
+gate and observation test files have zero Ruff/type diagnostics on both their
+fixed parent and final source. The HKCU PATH value/type fingerprint stayed
 `2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
 No production auth/home/config/registry, service, install, model or network
 operation was performed. This establishes the isolated core startup/dispatch
