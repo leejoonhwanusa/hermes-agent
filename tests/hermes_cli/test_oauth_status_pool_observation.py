@@ -519,3 +519,189 @@ def test_config_observation_reads_existing_good_backup_and_overlay(observed_conf
     assert result["agent"]["max_turns"] == 321 and result["display"]["fixture_overlay"] is True
     unchanged = _auth_manifest(home) == before
     assert unchanged and not config._LOAD_CONFIG_CACHE
+
+
+
+@pytest.mark.parametrize("case", ["healthy", "singleton", "profile-fork", "dead", "corrupt", "missing", "corrupt-config", "interrupted", "interrupted-unreadable", "ordinary-help", "ordinary-update-help", "ordinary-version"])
+def test_exact_status_real_cli_startup_and_dispatch_observe_only(observed_auth_store, monkeypatch, capsys, case, tmp_path):
+    """Cold main import, real parser/dispatch/helpers; only PM and external OS leaves are fake.
+
+    PM preparation/activation have their own real-chain deadline regressions. Here
+    their adapters report a prepared local runtime without spawning a real worker.
+    """
+    import importlib
+    import os
+    from pathlib import Path
+    import sys
+    import hermes_constants
+    import hermes_cli.env_loader as env_loader
+    import hermes_cli.venv_sync as venv_sync
+    from hermes_cli import _early_recovery, _install_repair, boot_bootstrap, main_install_repair, main_web_build
+    import hermes_cli.update_cmd_fleet as fleet
+    import pm.environments as environments
+
+    ordinary = case.startswith("ordinary-")
+    root, auth_events = observed_auth_store("healthy" if ordinary or case in {"missing", "corrupt-config", "interrupted", "interrupted-unreadable"} else case)
+    home = Path(os.environ["HERMES_HOME"])
+    if case == "missing":
+        import shutil
+        shutil.rmtree(root)
+    else:
+        (home / "config.yaml").write_text("model: [broken" if case == "corrupt-config" else
+            "model:\n  provider: openai-codex\nsecurity:\n  redact_secrets: true\n", encoding="utf-8")
+        (home / ".env").write_bytes(b'STARTUP_FIXTURE="fake value"\x00\n')
+    from hermes_cli import config, config_effective, managed_scope
+    config._LOAD_CONFIG_CACHE.clear()
+    config._RAW_CONFIG_CACHE.clear()
+    config_effective._EFFECTIVE_CACHE.clear()
+    config_effective._LAST_GOOD_USER_RAW.clear()
+    managed_scope.invalidate_managed_cache()
+    events = []
+    project = tmp_path / "checkout"
+    project.mkdir()
+    monkeypatch.setattr(_early_recovery, "_project_root", lambda: project)
+    monkeypatch.setattr(_early_recovery, "restore_interrupted_pull", lambda: events.append("restore") or False)
+    monkeypatch.setattr(_install_repair, "ensure_windows_bin_launchers", lambda *a: events.append("launcher-repair"))
+    monkeypatch.setattr(main_install_repair, "_cleanup_quarantined_exes", lambda: events.append("quarantine"))
+    monkeypatch.setattr(main_web_build, "_sweep_stale_bytecode_if_checkout_changed", lambda: events.append("bytecode-sweep"))
+    monkeypatch.setattr(fleet, "_warn_pending_fleet_restart_on_startup", lambda: events.append("fleet-retain"))
+    monkeypatch.setattr(boot_bootstrap, "maybe_run_boot_bootstrap", lambda *a: events.append("boot-maintenance"))
+    monkeypatch.setattr(venv_sync, "check_runtime", lambda *a: events.append("extra-pm-activation"))
+    monkeypatch.setattr(venv_sync, "prepare_launch", lambda *a, **kw: events.append(("prepare", kw.get("deadline") is not None)))
+    monkeypatch.setattr(environments, "activate_dependencies", lambda *a, **kw: events.append(("activate", kw.get("read_only"))))
+    fact = project / 'facts.json'
+    fact.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(environments, 'runtime_facts_path', lambda *a: fact)
+    monkeypatch.setattr(env_loader, "_apply_external_secret_sources", lambda *a: events.append("external-secret"))
+    load_env = env_loader.load_hermes_dotenv
+    monkeypatch.setattr(env_loader, "load_hermes_dotenv", lambda **kw: load_env(project_env=project / ".env"))
+    # Force scratch's real creation/prune path to be observable in the fake home.
+    for key in hermes_constants.SCRATCH_TMP_ENV_VARS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv(hermes_constants.SCRATCH_DIR_MARKER_ENV, raising=False)
+    argv = {"ordinary-help": ["--help"], "ordinary-update-help": ["update", "--help"],
+            "ordinary-version": ["--version"]}.get(case, ["auth", "status", "openai-codex"])
+    monkeypatch.setattr(sys, "argv", ["hermes", *argv])
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    monkeypatch.delattr(sys, "_hermes_status_deadline", raising=False)
+    for name in ("hermes_bootstrap", "hermes_cli.main"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    before = _auth_manifest(root)
+    directories = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_dir()}
+    mtimes = {str(p.relative_to(root)): p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
+    if case in {"interrupted", "interrupted-unreadable"}:
+        marker = _early_recovery.interrupted_pull_marker(project)
+        marker.parent.mkdir()
+        marker.write_text("fixture interrupted update", encoding="utf-8")
+        if case == "interrupted-unreadable":
+            stat = os.stat
+            def unreadable(path, *args, **kwargs):
+                if isinstance(path, (str, Path)) and Path(path) == marker:
+                    raise PermissionError("fixture unreadable update state")
+                return stat(path, *args, **kwargs)
+            monkeypatch.setattr(os, "stat", unreadable)
+            # Windows exists() is a native Boolean API; it carries no access-error detail.
+            exists = os.path.exists
+            monkeypatch.setattr(os.path, 'exists', lambda path: False if Path(path) == marker else exists(path))
+        with pytest.raises(SystemExit) as error:
+            importlib.import_module("hermes_cli.main")
+        assert error.value.code == 1
+        reason = "interrupted-update state is unreadable" if case == "interrupted-unreadable" else "interrupted source update"
+        assert "runtime-not-ready: " + reason in capsys.readouterr().err
+        assert marker.read_text(encoding="utf-8") == "fixture interrupted update"
+        assert _auth_manifest(root) == before
+        assert events == [("prepare", True), ("activate", True)]
+        return
+    if ordinary:
+        try:
+            cli = importlib.import_module("hermes_cli.main")
+            cli.main()
+        except SystemExit as error:
+            assert error.code in (None, 0)
+        # Ordinary initialization/version metadata may copy SOUL or request a network probe.
+        # The fixture blocks every such external call; it must never mutate the auth store.
+        assert not any(event in auth_events for event in ('auth-lock', 'save-store', 'save-clean-mark'))
+        assert ("prepare", False) in events and ("activate", None) in events
+        assert "restore" in events
+        if case != "ordinary-version":
+            assert "launcher-repair" in events if sys.platform == "win32" else True
+            assert "quarantine" in events and "bytecode-sweep" in events
+            assert "extra-pm-activation" in events
+            assert ("boot-maintenance" in events) is (case == "ordinary-help")
+            assert ("external-secret" in events) is (case == "ordinary-help")
+            assert (home / "logs").is_dir()
+            assert b"\x00" not in (home / ".env").read_bytes()
+        capsys.readouterr()
+        return
+    cli = importlib.import_module("hermes_cli.main")
+    cli.main()
+    output = capsys.readouterr()
+    assert "openai-codex" in output.out.lower() or "codex" in output.out.lower()
+    assert ("openai-codex: logged in" in output.out) is (case not in {"corrupt", "missing"})
+    assert _auth_manifest(root) == before
+    assert {str(p.relative_to(root)) for p in root.rglob("*") if p.is_dir()} == directories
+    assert {str(p.relative_to(root)): p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()} == mtimes
+    assert not auth_events
+    assert events == [("prepare", True), ("activate", True)], events
+    assert not (home / "cache").exists() and not (home / "logs").exists()
+
+    if case == "missing":
+        assert not root.exists()
+    if case == "profile-fork":
+        # The real profile override and reader caches must alternate A -> B -> A.
+        for name in ("default", "named", "default"):
+            monkeypatch.setenv("HERMES_HOME", str(root))
+            monkeypatch.setattr(sys, "argv", ["hermes", "-p", name, "auth", "status", "openai-codex"])
+            monkeypatch.delitem(sys.modules, "hermes_cli.main")
+            cli = importlib.import_module("hermes_cli.main")
+            cli.main()
+            capsys.readouterr()
+            assert Path(os.environ["HERMES_HOME"]) == (root if name == "default" else root / "profiles" / "named")
+            assert _auth_manifest(root) == before
+            assert not auth_events
+        assert events == [("prepare", True), ("activate", True)]
+
+
+@pytest.mark.parametrize("case", ["healthy", "missing", "corrupt-config"])
+def test_exact_status_cold_process_uses_real_startup(case, tmp_path):
+    """Fresh interpreter: real import graph/CLI dispatch against only synthetic state.
+
+    Reuse the same existing auth fixture and its forbidden-external seams, rather
+    than replace main/config/auth handlers with a fabricated status runner.
+    """
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    home = tmp_path / "process-home"
+    home.mkdir()
+    script = r"""
+import contextlib, importlib.util, io, os, pathlib, sys, types
+import pytest
+base = pathlib.Path(sys.argv[1])
+sys.path.insert(0, sys.argv[2])
+spec = importlib.util.spec_from_file_location('status_fixture', sys.argv[3])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+out, err = io.StringIO(), io.StringIO()
+class Capture:
+    def readouterr(self):
+        result = types.SimpleNamespace(out=out.getvalue(), err=err.getvalue())
+        out.seek(0); out.truncate(); err.seek(0); err.truncate()
+        return result
+with pytest.MonkeyPatch.context() as patch:
+    seed = module.observed_auth_store.__wrapped__(base, patch)
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        module.test_exact_status_real_cli_startup_and_dispatch_observe_only(
+            seed, patch, Capture(), sys.argv[4], base)
+print('cold-status-observation-ok')
+"""
+    env = {**os.environ, "HERMES_HOME": str(home), "CODEX_HOME": str(tmp_path / "unused-codex"),
+           "HERMES_MANAGED_DIR": str(tmp_path / "managed"), "LOCALAPPDATA": str(tmp_path),
+           "HERMES_RUNTIME_DIR": str(tmp_path / "runtime")}
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(tmp_path),
+                             str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve()), case],
+                            env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "cold-status-observation-ok"

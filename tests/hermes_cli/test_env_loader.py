@@ -622,3 +622,34 @@ def test_dotenv_published_dashboard_session_token_still_reloads(tmp_path, monkey
     (home / ".env").write_text("HERMES_DASHBOARD_SESSION_TOKEN=second\n", encoding="utf-8")
     load_hermes_dotenv(hermes_home=home)
     assert os.environ["HERMES_DASHBOARD_SESSION_TOKEN"] == "second"
+
+
+
+def test_exact_status_dotenv_observation_preserves_utf16_and_managed_files(tmp_path, monkeypatch):
+    import sys
+    import hermes_cli.env_loader as loader
+    from hermes_cli import managed_scope
+
+    home, managed = tmp_path / "home", tmp_path / "managed"
+    home.mkdir()
+    managed.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    managed_scope.invalidate_managed_cache()
+    user = home / ".env"
+    user.write_bytes('OBSERVATION_FIXTURE="fake user"\x00\n'.encode("utf-16"))
+    admin = managed / ".env"
+    admin.write_bytes(b'OBSERVATION_FIXTURE="fake managed"\x00\n')
+    before = (user.read_bytes(), admin.read_bytes())
+    calls = []
+    monkeypatch.setattr(loader, "_apply_external_secret_sources", lambda *a: calls.append("external"))
+    monkeypatch.setattr(sys, "argv", ["hermes", "auth", "status", "openai-codex"])
+    load_hermes_dotenv()
+    assert os.environ["OBSERVATION_FIXTURE"] == "fake managed"
+    assert (user.read_bytes(), admin.read_bytes()) == before
+    assert calls == []
+    # Default runtime still sanitizes/publishes and requests the external source.
+    monkeypatch.setattr(sys, "argv", ["hermes", "chat"])
+    load_hermes_dotenv()
+    assert (user.read_bytes(), admin.read_bytes()) != before
+    assert calls == ["external"]

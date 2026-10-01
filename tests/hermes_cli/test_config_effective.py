@@ -121,3 +121,30 @@ def _reset_caches_keep_last_good():
 
     cfg._RAW_CONFIG_CACHE.clear()
     config_effective._EFFECTIVE_CACHE.clear()
+
+
+
+@pytest.mark.parametrize("case", ["missing", "valid", "corrupt", "overlay"])
+def test_effective_observation_never_publishes_backups_or_runtime_cache(homes, case):
+    from hermes_cli import config as cfg, config_effective as effective
+
+    home, managed = homes
+    if case != "missing":
+        _write(home / "config.yaml", "model: [broken" if case == "corrupt" else USER_YAML)
+    if case == "overlay":
+        _write(managed / "config.yaml", MANAGED_YAML)
+    before = {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()}
+    result = effective.load_user_config_effective(observe_only=True)
+    assert {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*") if p.is_file()} == before
+    assert not cfg._RAW_CONFIG_CACHE and not effective._LAST_GOOD_USER_RAW and not effective._EFFECTIVE_CACHE
+    if case in {"valid", "overlay"}:
+        assert result["model"]["provider"] == "custom"
+        if case == "overlay":
+            assert result["display"]["skin"] == "managed-skin"
+        effective.load_user_config_effective()
+        assert list((home / "backups" / "config").glob("*.good.*"))
+    elif case == "corrupt":
+        with pytest.raises(yaml.YAMLError):
+            effective.load_user_config_effective(observe_only=True, fail_closed=True)
+        effective.load_user_config_effective()
+        assert list((home / "backups" / "config").glob("*.corrupt.*"))

@@ -67,7 +67,7 @@ _UPDATE_RETRY_RECOVERED = False
 
 
 def _should_skip_external_secret_sources() -> bool:
-    """True inside any ``hermes update`` process (and its import probes).
+    """True inside an updater or the exact observational Codex auth status command.
 
     Every dotenv load in the process — ``hermes_cli.main``, ``run_agent``, ``cli`` — consults
     this, so the updater never resolves external secret sources: on Windows they map
@@ -77,7 +77,10 @@ def _should_skip_external_secret_sources() -> bool:
     Profile flags are stripped before ``hermes_cli.main`` loads dotenv, so ``argv[1]`` is
     the authoritative subcommand.
     """
-    return _UPDATE_RETRY_RECOVERED or sys.argv[1:2] == ["update"]
+    from hermes_cli.venv_sync import is_auth_status_probe
+
+    return (_UPDATE_RETRY_RECOVERED or sys.argv[1:2] == ["update"]
+            or is_auth_status_probe(sys.argv[1:]))
 
 
 def _project_root() -> Path:

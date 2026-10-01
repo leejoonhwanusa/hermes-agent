@@ -25,7 +25,27 @@ except ModuleNotFoundError as exc:
 # dir, so if IT can't import nothing in hermes_cli can.
 from hermes_cli import _early_recovery as _early_recovery_mod
 
-if _early_recovery_mod.restore_interrupted_pull():
+# Keep the exact observational command on the existing preparation policy.
+# It must not restore the checkout underneath a status reader.
+import sys
+from hermes_cli.venv_sync import is_auth_status_probe
+
+_AUTH_STATUS_OBSERVE_ONLY = is_auth_status_probe(sys.argv[1:])
+if _AUTH_STATUS_OBSERVE_ONLY:
+    sys.dont_write_bytecode = True
+    try:
+        _early_recovery_mod.interrupted_pull_marker(_early_recovery_mod._project_root()).stat()
+    except FileNotFoundError:
+        _interrupted = False
+    except OSError:
+        print("hermes: runtime-not-ready: interrupted-update state is unreadable; run `hermes update`", file=sys.stderr)
+        raise SystemExit(1) from None
+    else:
+        _interrupted = True
+    if _interrupted:
+        print("hermes: runtime-not-ready: interrupted source update; run `hermes update`", file=sys.stderr)
+        raise SystemExit(1)
+elif _early_recovery_mod.restore_interrupted_pull():
     _early_recovery_mod.relaunch_after_restore()
 
 # Windows: neutralize CPython's ``platform._syscmd_ver`` before anything else
@@ -37,7 +57,6 @@ suppress_platform_ver_console()
 
 import os
 import re
-import sys
 
 # Inline path math so ``python hermes_cli/main.py`` (script mode: sys.path[0]
 # is hermes_cli/, not the repo root) can import hermes_cli._startup_fast.
@@ -650,7 +669,8 @@ _apply_profile_override()
 try:
     from hermes_constants import export_scratch_tmp_env as _export_scratch_tmp_env
 
-    _export_scratch_tmp_env()
+    if not _AUTH_STATUS_OBSERVE_ONLY:
+        _export_scratch_tmp_env()
 except Exception:
     pass  # an unwritable home leaves the system temp dir in place; never block startup
 
@@ -675,7 +695,7 @@ if sys.argv[1:2] == ["pm"]:
 # resolving in every new terminal (venv\Scripts itself must stay off PATH — it shadows the user's
 # ``python``, #83797). Costs a few stat calls when healthy; gates fail toward inaction so source checkouts
 # are untouched.
-if sys.platform == "win32":
+if sys.platform == "win32" and not _AUTH_STATUS_OBSERVE_ONLY:
     try:
         from hermes_cli import _install_repair as _install_repair_mod
 
@@ -706,7 +726,7 @@ try:
 
     _cfg_path = get_hermes_home() / "config.yaml"
     if _cfg_path.exists():
-        _early_cfg_raw = _load_effective_early(_cfg_path)
+        _early_cfg_raw = _load_effective_early(_cfg_path, observe_only=_AUTH_STATUS_OBSERVE_ONLY)
         if "HERMES_REDACT_SECRETS" not in os.environ:
             _early_sec_cfg = _early_cfg_raw.get("security", {})
             if isinstance(_early_sec_cfg, dict):
@@ -726,14 +746,15 @@ except Exception:
 try:
     from hermes_logging import setup_logging as _setup_logging
 
-    _setup_logging(
-        mode=(
-            "gui"
-            if next((arg for arg in sys.argv[1:] if not arg.startswith("-")), "")
-            in {"dashboard", "serve", "gui", "desktop"}
-            else "cli"
+    if not _AUTH_STATUS_OBSERVE_ONLY:
+        _setup_logging(
+            mode=(
+                "gui"
+                if next((arg for arg in sys.argv[1:] if not arg.startswith("-")), "")
+                in {"dashboard", "serve", "gui", "desktop"}
+                else "cli"
+            )
         )
-    )
 except Exception:
     pass  # best-effort — don't crash the CLI if logging setup fails
 
@@ -3604,17 +3625,19 @@ def main():
     # Sweep stale ``hermes.exe.old.*`` quarantine files from previous Windows
     # updates. No-op elsewhere.
     try:
-        _cleanup_quarantined_exes()
+        if not _AUTH_STATUS_OBSERVE_ONLY:
+            _cleanup_quarantined_exes()
     except Exception:
         pass
 
     # Checkout changed since last launch → sweep stale __pycache__ once so no
     # process resolves fresh source against old bytecode. Never raises.
-    _sweep_stale_bytecode_if_checkout_changed()
+    if not _AUTH_STATUS_OBSERVE_ONLY:
+        _sweep_stale_bytecode_if_checkout_changed()
 
     # Dependency recovery already ran before imports. Report any fleet restart
     # still owed by a previous update without restarting services here.
-    if "update" not in sys.argv[1:]:
+    if not _AUTH_STATUS_OBSERVE_ONLY and "update" not in sys.argv[1:]:
         try:
             from hermes_cli.update_cmd_fleet import _warn_pending_fleet_restart_on_startup
 
@@ -3622,7 +3645,7 @@ def main():
         except Exception:
             pass
 
-    if _first_positional_argv() != "update":
+    if not _AUTH_STATUS_OBSERVE_ONLY and _first_positional_argv() != "update":
         from hermes_cli.boot_bootstrap import maybe_run_boot_bootstrap
         from pm.paths import install_root
         maybe_run_boot_bootstrap(install_root())
@@ -3632,7 +3655,8 @@ def main():
         from hermes_cli.venv_sync import check_runtime
         from pm.paths import install_root
 
-        problem = check_runtime(install_root())
+        # Exact status already obtained the authoritative bounded bootstrap verdict.
+        problem = None if _AUTH_STATUS_OBSERVE_ONLY else check_runtime(install_root())
         if problem:
             print(f"⚠ {problem}", file=sys.stderr)
     except Exception:

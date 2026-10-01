@@ -599,4 +599,5 @@ if not _pm_repair:
             print(f"hermes: {exc}; run `hermes pm repair`", file=sys.stderr)
             raise SystemExit(1) from None
 install_happy_eyeballs_socket_connect()
-export_scratch_tmp_env()
+if _pm_repair or not _status_probe:
+    export_scratch_tmp_env()

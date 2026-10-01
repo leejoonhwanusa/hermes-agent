@@ -262,7 +262,8 @@ def _sanitize_loaded_credentials() -> None:
         )
 
 
-def _load_dotenv_with_fallback(path: Path, *, override: bool, load_pass: int | None = None) -> None:
+def _load_dotenv_with_fallback(path: Path, *, override: bool, load_pass: int | None = None,
+                               observe_only: bool = False) -> None:
     """Load one dotenv file into ``os.environ`` like ``dotenv.load_dotenv`` — same parser, same
     ``${VAR}`` / ``${VAR:-default}`` / precedence rules — except that ``${VAR}`` resolves against the value
     VAR had before this process's earlier passes published it (see ``_DOTENV_PUBLISHED``).
@@ -284,6 +285,11 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool, load_pass: int | N
     from dotenv.main import DotEnv
     from dotenv.variables import parse_variables
 
+    if observe_only:
+        # Reuse the normal sanitizer in memory; status never canonicalizes files on disk.
+        normalized = _sanitize_env_file_if_needed(path, observe_only=True)
+        if normalized is not None:
+            text = normalized
     assignments = list(DotEnv(dotenv_path=None, stream=io.StringIO(text), interpolate=False).parse())
 
     with _DOTENV_LOCK:
@@ -317,7 +323,7 @@ def _load_dotenv_with_fallback(path: Path, *, override: bool, load_pass: int | N
     _sanitize_loaded_credentials()  # httpx encodes headers as ASCII
 
 
-def _sanitize_env_file_if_needed(path: Path) -> None:
+def _sanitize_env_file_if_needed(path: Path, *, observe_only: bool = False) -> str | None:
     """Pre-sanitize a .env file before python-dotenv reads it. Sniffs a leading BOM *before* any text
     decode: UTF-16 (Notepad "Unicode") is rewritten as clean UTF-8; UTF-32 is refused (left untouched) so
     we never fall through to the errors=replace corruption path."""
@@ -369,6 +375,8 @@ def _sanitize_env_file_if_needed(path: Path) -> None:
         # Strip NULs (os.environ raises ValueError on them); also repairs BOM-less UTF-16 (NUL-padded ASCII).
         stripped = [line.replace("\x00", "") for line in original]
         sanitized = _sanitize_env_lines(stripped)
+        if observe_only:
+            return "".join(sanitized)
         if sanitized != original or force_utf8_rewrite:
             import tempfile
             fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=".env_")
@@ -400,6 +408,9 @@ def load_hermes_dotenv(
     # profile — see the multiplex guard below.
     from hermes_constants import get_process_hermes_home
     home_path = Path(hermes_home) if hermes_home else get_process_hermes_home()
+    from hermes_cli.venv_sync import is_auth_status_probe
+
+    observe_only = is_auth_status_probe(sys.argv[1:])
 
     # Multiplex gateway: while a routed profile-home override is active, copying that profile's .env
     # into os.environ would expose its credentials to sibling turns and every spawned child. The launch
@@ -432,13 +443,13 @@ def load_hermes_dotenv(
     project_env_path = Path(project_env) if project_env else None
     load_pass = next(_DOTENV_PASSES)  # one pass: later layers below see the earlier layers' output
 
-    if user_env.exists():  # normalize formatting / strip NULs before parsing
+    if user_env.exists() and not observe_only:  # runtime canonicalizes; observation sanitizes in memory
         _sanitize_env_file_if_needed(user_env)
-    if project_env_path and project_env_path.exists():
+    if project_env_path and project_env_path.exists() and not observe_only:
         _sanitize_env_file_if_needed(project_env_path)
 
     if user_env.exists():
-        _load_dotenv_with_fallback(user_env, override=True, load_pass=load_pass)
+        _load_dotenv_with_fallback(user_env, override=True, load_pass=load_pass, observe_only=observe_only)
         loaded.append(user_env)
         _clear_known_keys_missing_from_dotenv(user_env)  # mirrors reload_env(): inherited keys must not leak
 
@@ -447,10 +458,10 @@ def load_hermes_dotenv(
     # the committed .env. override=False lets a systemd `EnvironmentFile=-…/.op.env` token win.
     op_env = home_path / ".op.env"
     if op_env.exists() and not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
-        _load_dotenv_with_fallback(op_env, override=False, load_pass=load_pass)
+        _load_dotenv_with_fallback(op_env, override=False, load_pass=load_pass, observe_only=observe_only)
 
     if project_env_path and project_env_path.exists():
-        _load_dotenv_with_fallback(project_env_path, override=not loaded, load_pass=load_pass)
+        _load_dotenv_with_fallback(project_env_path, override=not loaded, load_pass=load_pass, observe_only=observe_only)
         loaded.append(project_env_path)
 
     # The override=True loads above wrote the raw .env line (``__BITWARDEN_MANAGED__`` placeholder, stale
@@ -477,7 +488,7 @@ def load_hermes_dotenv(
     # managed env still load in both cases; only external source resolution is unnecessary for the updater.
     if load_external_secrets and not _early_recovery._should_skip_external_secret_sources():
         _apply_external_secret_sources(home_path)
-    _apply_managed_env(load_pass=load_pass)
+    _apply_managed_env(load_pass=load_pass, **({"observe_only": True} if observe_only else {}))
 
     # config.yaml owns terminal.*, but the override=True loads above let a stale TERMINAL_ENV=docker in
     # ~/.hermes/.env win on every reload and flip the backend mid-session in long-lived processes.
@@ -488,7 +499,9 @@ def load_hermes_dotenv(
     # reload. Startup launchers bridge config→env once, but long-lived processes (gateway per-turn reload,
     # cron standalone runs) call load_hermes_dotenv() repeatedly and used to flip the effective backend back
     # to the stale .env value mid-session (#29186, #67323).
-    _reapply_terminal_config_bridge(home_path)
+    # Status has no terminal execution consumer; its metadata readers keep their own observation policy.
+    if not observe_only:
+        _reapply_terminal_config_bridge(home_path)
 
     return loaded
 
@@ -507,7 +520,7 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
         pass
 
 
-def _apply_managed_env(*, load_pass: int | None = None) -> None:
+def _apply_managed_env(*, load_pass: int | None = None, observe_only: bool = False) -> None:
     """Apply the managed-scope .env last, with override, so it beats user/shell. Does NOT stop the agent
     from later mutating os.environ (v1 relies on filesystem permissions). Fail-open: never blocks startup."""
     try:
@@ -521,8 +534,9 @@ def _apply_managed_env(*, load_pass: int | None = None) -> None:
     managed_env = managed_dir / ".env"
     if not managed_env.exists():
         return
-    _sanitize_env_file_if_needed(managed_env)
-    _load_dotenv_with_fallback(managed_env, override=True, load_pass=load_pass)
+    if not observe_only:
+        _sanitize_env_file_if_needed(managed_env)
+    _load_dotenv_with_fallback(managed_env, override=True, load_pass=load_pass, observe_only=observe_only)
 
 
 def _apply_external_secret_sources(home_path: Path) -> None:

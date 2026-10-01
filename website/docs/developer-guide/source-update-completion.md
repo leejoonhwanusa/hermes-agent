@@ -235,16 +235,73 @@ homes; that known failure remains outside this patch. Its one-time comparison
 code was removed before commit. Exact diff checks passed and the HKCU PATH
 value/type fingerprint remained `2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
 
-This is a helper boundary result. SkillWave invokes the complete CLI via
-`skill_wave_runtime_contract.py::run_automation_auth_preflight`, so it also pays
-the earlier `main.py` startup path. That path still reads `config_effective`
-with good-backup side effects, configures diagnostic files, sweeps shim/bytecode
-artifacts and, after a revision change, runs `BOOT_HOME_STEPS` (including config
-migration, plugin-cache invalidation, launcher/PATH exposure and a boot record).
-These startup owners were inspected but not changed here. The existing exact
-`venv_sync.is_auth_status_probe()` predicate is the proposed boundary for a
-separate minimal startup observation policy; normal startup/update behavior must
-remain intact. User-installed provider auth handlers keep their own contracts.
-Actual auth status, whole-CLI safety and natural SkillWave recovery were not
-executed or established. The installation is editable; running processes were
-not restarted and runtime adoption is not inferred from this source commit.
+The 2026-09-30 result above covers the helper boundary. SkillWave invokes the
+complete CLI via `skill_wave_runtime_contract.py::run_automation_auth_preflight`,
+including the earlier startup path. The following change extends that same
+observation policy through the real CLI startup. User-installed provider auth
+handlers keep their own contracts; stored metadata does not prove a live login.
+
+### Exact Codex auth status startup observation
+
+`main.py`, bootstrap, dotenv and source launchers reuse the existing
+`venv_sync.is_auth_status_probe()` predicate for exactly
+`auth status openai-codex`, including the existing global/profile argv handling.
+Bootstrap still requires the canonical PM currency result and observational
+activation with its existing finite deadline. Main does not repeat PM activation
+after that verdict. An interrupted-pull marker causes explicit nonzero
+`runtime-not-ready` instead of checkout restoration or marker deletion. Marker
+metadata errors also fail closed; only a confirmed missing file counts as absent.
+
+For this command only, startup does not run scratch initialization/pruning,
+Windows launcher repair, file logging, quarantine/bytecode sweeps, fleet receipt
+retention, or revision-triggered boot maintenance. Thus it does not implicitly
+migrate config, expose PATH, rewrite launchers, create a boot record or recover
+an unfinished update. Ordinary commands retain those existing paths.
+
+The early security/network config bridge uses the existing defaults-free
+effective reader with `observe_only=True`. It preserves expansion, managed
+overlay, explicit settings, existing last-known-good reads and `fail_closed`,
+without good/corrupt backup or ordinary-cache publication. Local dotenv layers
+retain precedence and use the existing sanitizer in memory (including UTF-16,
+BOM and NUL handling); status does not canonicalize user/project/managed files
+on disk or resolve external secret-manager sources. It has no terminal execution
+consumer, so it does not initialize the terminal config bridge. No separate
+config reader/store or auth/permission policy was introduced.
+
+`runtime_command()` adds `-B` for the exact main command. Newly generated source
+launchers classify argv with bytecode writing temporarily disabled, retain that
+policy for exact status and restore the ordinary policy for other invocations.
+This prevents even classifier/application bytecode publication in their isolated
+fixtures. An already-published launcher embeds its previous script: an editable
+source commit alone does not replace those bytes. A direct external
+`python -m hermes_cli.main` without `-B` can write initial import bytecode before
+main sets its policy. These entry forms require the existing normal publication
+or an explicit no-bytecode interpreter invocation before claiming that boundary.
+No launcher installation/publication was performed for this source change.
+
+On 2026-10-01 UTC, the pre-fix real main import/parser/handler chain changed
+synthetic dotenv/config/SOUL state in all seven selected status variants. After
+the change, isolated tests cover healthy/singleton/profile-fork/old DEAD/corrupt
+auth, absent home, corrupt config, interrupted update, profile A-to-B-to-A, fresh
+interpreter startup, and default help/update-help/version controls. Existing PM
+preparation/activation deadline regressions remain separate: the CLI integration
+fixtures replace their external adapters with a prepared local verdict and do
+not execute a real PM worker or authenticate. File bytes, mtimes, directories,
+auth maintenance requests and expected dispatch results are checked; external
+authentication/network requests are blocked. The ordinary version control keeps
+its existing metadata-probe behavior against that blocked fake boundary.
+
+Across scoped canonical runs, 134 distinct cases in eight existing test files
+passed (unchanged helper selections were retained). The final affected startup
+selection passed all 15 cases. Ruff has no issues
+and fixed-parent type lint has no new stable diagnostic (68 existing diagnostics
+remain). The HKCU PATH value/type fingerprint stayed
+`2529b2b471de856ca206fe20dfe57bb7a06c0e9afa8b89f824a2795ccc1fe3d0`.
+No production auth/home/config/registry, service, install, model or network
+operation was performed. This establishes the isolated core startup/dispatch
+contract, not successful real credentials or natural SkillWave recovery.
+The preparation deadline bounds its PM/activation chain, not all Python imports
+or local config I/O of the full command. The installation remains editable;
+running processes and previously generated launchers were not restarted or
+replaced. A separately authorized natural whole-command/SkillWave observation
+with confirmed entrypoint policy is still required for runtime recovery claims.

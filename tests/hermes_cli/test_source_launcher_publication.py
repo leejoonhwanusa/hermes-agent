@@ -544,3 +544,26 @@ def test_update_import_probe_uses_selected_dependencies(tmp_path, monkeypatch):
     (repo / "hermes_integrity_probe.py").write_text("import selected_probe\n", encoding="utf-8")
     monkeypatch.setattr(update_cmd, "_UPDATE_CRITICAL_MODULES", ("hermes_integrity_probe",))
     assert update_cmd_validation._critical_module_import_failures(repo, report_runtime_errors=True) == {}
+
+
+
+@pytest.mark.parametrize("form", ["runtime-command", "published-script"])
+@pytest.mark.parametrize("argv, observe", [(["auth", "status", "openai-codex"], True),
+                                          (["-p", "default", "auth", "status", "openai-codex"], True),
+                                          (["--help"], False), (["auth", "status", "nous"], False)])
+def test_status_launcher_does_not_publish_classifier_or_application_bytecode(tmp_path, monkeypatch, form, argv, observe):
+    repo, home, interpreter = fixture_tree(tmp_path, monkeypatch)
+    # This fixture observes only bytecode at the launcher boundary. Bootstrap/PM
+    # and real main/handler behavior are tested by the existing separate chains.
+    (repo / "hermes_bootstrap.py").write_text("", encoding="utf-8")
+    (repo / "hermes_cli/main.py").write_text(
+        "import sys\ndef main():\n    print(sys.dont_write_bytecode)\n    return 0\n"
+        "if __name__ == '__main__': main()\n", encoding="utf-8")
+    if form == "runtime-command":
+        command = _launchers.runtime_command(repo, argv, python=interpreter, home=home)
+    else:
+        command = [str(interpreter), "-I", "-c", _launchers._launcher_script("hermes", repo, None), *argv]
+    result = subprocess.run(command, cwd=tmp_path, env=dict(os.environ), capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(observe)
+    assert bool(list(repo.rglob("*.pyc"))) is (not observe)

@@ -47,7 +47,10 @@ def runtime_command(repo_root: Path, args=(), *, module: str = "hermes_cli.main"
         "import hermes_bootstrap; "
         + entry
     )
-    return [str(python), "-I", "-c", bootstrap, *args]
+    from hermes_cli.venv_sync import is_auth_status_probe
+
+    flags = ["-B"] if module == "hermes_cli.main" and is_auth_status_probe(list(args)) else []
+    return [str(python), "-I", *flags, "-c", bootstrap, *args]
 
 
 def print_runtime_command(repo_root: Path, argv: list[str]) -> None:
@@ -275,7 +278,11 @@ def _launcher_script(name: str, repo_root: Path, dependencies: Path | None) -> s
         "os.environ.pop('PYTHONHOME', None)\n"
         "os.environ.pop('PYTHONPATH', None)\n"
         f"sys.path.insert(0, {str(repo_root.resolve())!r})\n"
-        "if sys.argv[1:2] == ['--print-runtime-command']: sys.dont_write_bytecode = True\n"
+        # Classify without writing classifier bytecode before its policy is known.
+        "_previous_bytecode_policy = sys.dont_write_bytecode\n"
+        "sys.dont_write_bytecode = True\n"
+        "from hermes_cli.venv_sync import is_auth_status_probe\n"
+        f"sys.dont_write_bytecode = (_previous_bytecode_policy or ({name!r} == 'hermes' and is_auth_status_probe(sys.argv[1:])) or sys.argv[1:2] == ['--print-runtime-command'])\n"
         "from hermes_constants import get_default_hermes_root\n"
         "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or str(get_default_hermes_root())\n"
         "if sys.argv[1:2] == ['--print-runtime-command']:\n"
