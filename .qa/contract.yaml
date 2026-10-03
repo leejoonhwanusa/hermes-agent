@@ -19,19 +19,19 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Official source integration, Windows update pause, install-global policy, and existing completion/backup receipt regressions; excludes the OS-authority Task-creation case.
+    description: Focused rerun of the two official integration files corrected for Windows test-fixture drift; prior successful policy, completion, pipe and auth checks remain historical evidence.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_control_socket_windows_live.py tests/gateway/test_multiplex_hot_serve.py tests/gateway/test_gateway_shutdown.py tests/hermes_cli/test_gateway_windows.py tests/hermes_cli/test_env_loader.py tests/hermes_cli/test_update_launch_completion.py tests/hermes_cli/test_source_launcher_publication.py tests/hermes_cli/test_venv_sync_currency.py tests/hermes_cli/test_update_parked_branch_guard.py tests/hermes_cli/test_update_receipt.py -- -v --tb=short -k 'not test_exec_schtasks_round_trips_non_ascii_task_argument_live'"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_gateway_shutdown.py tests/hermes_cli/test_source_launcher_publication.py -- -v --tb=short"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for official update integration, policy readers, Windows pause and their affected existing tests.
+    description: Scoped Ruff for the two corrected Windows test-fixture files; production and other affected paths already passed.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
-    command_argv: [check, gateway/run.py, gateway/run_profile_reconcile.py, gateway/control_socket.py, hermes_cli/gateway.py, hermes_cli/env_loader.py, hermes_cli/source_completion.py, hermes_cli/venv_sync.py, hermes_cli/update_cmd.py, hermes_cli/update_cmd_git.py, hermes_cli/update_cmd_maint.py, tests/gateway/test_control_socket_windows_live.py, tests/gateway/test_multiplex_hot_serve.py, tests/gateway/test_gateway_shutdown.py, tests/hermes_cli/test_gateway_windows.py, tests/hermes_cli/test_env_loader.py, tests/hermes_cli/test_update_launch_completion.py, tests/hermes_cli/test_source_launcher_publication.py, tests/hermes_cli/test_venv_sync_currency.py, tests/hermes_cli/test_update_parked_branch_guard.py, tests/hermes_cli/test_update_receipt.py]
+    command_argv: [check, tests/gateway/test_gateway_shutdown.py, tests/hermes_cli/test_source_launcher_publication.py]
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

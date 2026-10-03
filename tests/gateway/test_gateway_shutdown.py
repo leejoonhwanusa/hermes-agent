@@ -356,6 +356,7 @@ async def test_signal_initiated_shutdown_persists_running_not_stopped(tmp_path, 
 # with exit 1 (a silent crash loop).
 
 
+@pytest.mark.platforms("posix")
 def test_pid_exists_zombie_via_psutil_returns_false(monkeypatch):
     """The live path is psutil. psutil.pid_exists() returns True for a zombie,
     so _pid_exists must additionally check Process.status() == STATUS_ZOMBIE."""

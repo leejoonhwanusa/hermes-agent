@@ -79,6 +79,11 @@ def test_source_launchers_boot_selected_generation_from_custom_home(tmp_path, mo
     launchers = [Path(p) for p in _launchers.ensure_install_launchers(repo, out)]
     assert len(launchers) == len(_launchers.ENTRY_POINTS)
     if form == "shell":
+        # Git's bin/bash.exe wrapper rewrites arguments when invoked by bash.
+        if os.name == "nt" and Path(real_bash).parent.name == "bin":
+            actual_bash = Path(real_bash).parent.parent / "usr" / "bin" / "bash.exe"
+            if actual_bash.is_file():
+                real_bash = str(actual_bash)
         shell_out = tmp_path / "shell-commands"
         shell_out.mkdir()
         launchers = [
