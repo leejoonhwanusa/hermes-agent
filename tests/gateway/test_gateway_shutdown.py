@@ -138,6 +138,37 @@ async def test_gateway_stop_settles_completion_batch_before_adapter_disconnect()
     assert runner._completion_notification_batch_flush_tasks == set()
 
 
+@pytest.mark.platforms("windows")
+@pytest.mark.asyncio
+async def test_update_pause_drains_without_requesting_supervisor_restart(monkeypatch):
+    import gateway.control_socket as control_socket
+
+    runner, adapter = make_restart_runner()
+    adapter.disconnect = AsyncMock()
+
+    class ControlServer:
+        def __init__(self, *, verb_handlers):
+            self.handlers = verb_handlers
+
+        async def start(self):
+            return True
+
+        def cleanup_files(self):
+            pass
+
+    monkeypatch.setattr(control_socket, "GatewayControlServer", ControlServer)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: pytest.fail("pause spawned a restart helper"))
+    with patch("gateway.status.remove_pid_file"), patch("gateway.status.publish_runtime_status"):
+        server = await gateway_run._start_gateway_start_control_socket(runner)
+        assert server is not None
+        result = await asyncio.to_thread(server.handlers["pause-for-update"])
+        assert result["pausing"] is True
+        await asyncio.wait_for(runner._restart_task, timeout=5)
+    assert runner._running is False
+    assert runner._exit_code in (None, 0)
+    assert runner._restart_detached is False
+
+
 @pytest.mark.asyncio
 async def test_planned_service_exit_issues_no_restart_of_its_own(monkeypatch):
     runner, adapter = make_restart_runner()

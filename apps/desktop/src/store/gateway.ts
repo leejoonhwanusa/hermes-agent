@@ -19,7 +19,13 @@ import {
   LIVENESS_REPROBE_DELAY_MS
 } from '@/lib/gateway-liveness-policy'
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
-import { isTimeoutError, RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
+import { traceIdentityChange } from '@/lib/identity-trace'
+import {
+  isTimeoutError,
+  RECONNECT_ATTEMPT_TIMEOUT_MS,
+  SOURCE_SWITCH_DIAL_TIMEOUT_MS,
+  withTimeout
+} from '@/lib/with-timeout'
 import { notifyError, RECOVERY_ACTIONS } from '@/store/notifications'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'
 import { setConnection, setGatewayState } from '@/store/session'
@@ -196,10 +202,19 @@ interface Secondary {
   activationLeaseUntil: number
 }
 
-// How long a mid-dial activation holds its prune lease: covers a cold pool
-// backend spawn + socket connect with margin, while still letting a leaked
-// lease expire quickly enough for the reaper to reclaim the entry.
-const ACTIVATION_LEASE_MS = 30_000
+// How long a mid-dial activation holds its prune lease: it must outlast every
+// dial the renderer still treats as in flight, or the pruner reaps the switch
+// target mid-dial and the click resolves on a socket that is already closed
+// (#89622's mechanism, one budget change later). The activation dials now carry
+// SOURCE_SWITCH_DIAL_TIMEOUT_MS — the whole remote bring-up chain (ssh connect,
+// the platform/locate/version probes, the remote spawn's ready sentinel, the
+// forward) — so this is DERIVED from it rather than picked independently: at
+// the old 30 s literal, raising the dial budget to 135 s left the switch target
+// prunable for the last ~105 s of a *healthy* dial. The margin covers the
+// settle that releases the lease (the renderer's switch commit). Bounded on
+// purpose: a leaked lease still expires on its own and the reaper reclaims the
+// entry.
+const ACTIVATION_LEASE_MS = SOURCE_SWITCH_DIAL_TIMEOUT_MS + 15_000
 
 // ── HMR-stable module state ─────────────────────────────────────────────────
 // All mutable singletons (live sockets, active-profile routing, the event
@@ -288,7 +303,7 @@ function gatewayState(): GatewayRegistryState {
 
     // Existing dev-HMR containers predate whole-turn leases.
     store[STATE_KEY].reauthFailures ??= new Map()
-  store[STATE_KEY].dialFailures ??= new Map()
+    store[STATE_KEY].dialFailures ??= new Map()
     store[STATE_KEY].turnLeases ??= new Map()
     store[STATE_KEY].turnLeaseReleaseTimers ??= new Map()
 
@@ -397,17 +412,13 @@ export function setPrimaryGatewayConnectionId(
   connectionId: null | string | undefined,
   mode: 'local' | 'remote' | null | undefined = undefined
 ): void {
-  // Hardening for #95628: while the active route is a secondary scope, the
-  // window is looking at a NON-primary socket — any connection id flowing
-  // through presentation-layer code at that moment describes the secondary,
-  // not the primary. Accepting it would relabel the primary socket, so every
-  // ambient API/WebSocket helper (and new-session routing) silently lands on
-  // the wrong backend. The primary's own identity is (re)published by its
-  // boot/reconnect path, which runs with the primary route active.
-  if (!isActivePrimary()) {
-    return
-  }
-
+  // Every caller publishes the window's OWN primary socket (boot, reconnect,
+  // connection apply, HMR survivor), so record it even while a secondary is
+  // foregrounded. Refusing it there left primaryConnectionId naming the
+  // machine the primary socket had just left, and owner routing then sent
+  // that machine's requests to the other one. What belongs to the active
+  // scope is the AMBIENT request connection (#95628), which moves only while
+  // the primary is in front.
   g.primaryConnectionId = (connectionId ?? '').trim() || null
   g.primaryConnectionMode = mode === 'local' || mode === 'remote' ? mode : null
 
@@ -437,6 +448,10 @@ export function dialedGatewayModeFor(connectionId: null | string, profile: strin
 /** Publish the registry source owned by the window primary socket. */
 export function setPrimaryGatewayConnection(connection: Pick<HermesConnection, 'connectionId' | 'mode'> | null): void {
   setPrimaryGatewayConnectionId(connection?.connectionId, connection?.mode)
+}
+
+function traceAgentRoute(scope: string, via: string): void {
+  traceIdentityChange('gateway-route', scope, `via=${via} primary=${g.primaryConnectionId ?? '-'}/${g.primaryProfile}`)
 }
 
 function isPrimaryRegistryRoute(connectionId: null | string, profile: string): boolean {
@@ -678,6 +693,11 @@ function applyActive(profile: string, activationEpoch: number): boolean {
 
   g.$activeProfile.set(routeProfile)
   g.config?.onActiveRouteChanged?.(routeProfile)
+  traceIdentityChange(
+    'gateway-route',
+    'active',
+    `key=${g.activeKey} via=${g.activeKey === g.primaryProfile ? 'primary' : 'secondary'} conn=${activeGatewayConnectionId() ?? '-'} profile=${routeProfile}`
+  )
 
   return true
 }
@@ -777,6 +797,12 @@ async function openSecondary(entry: Secondary, spawnPriority: SpawnPriority = 'b
     // this secondary (SSH terminal, messaging DELETE, session send, …) never
     // settles either. Bound the same way use-gateway-boot.ts bounds the
     // primary's equivalent awaits.
+    //
+    // Two bring-ups with different legitimate worst cases: a registry route is a
+    // backend coming up on ANOTHER machine (ssh connect + probes + remote spawn +
+    // ready sentinel), which is the SOURCE_SWITCH_DIAL budget, while a local
+    // profile's pooled child spawns on this machine (measured ~9 s; the
+    // reconnect-class budget is not the binding constraint there).
     const conn =
       entry.connectionId && desktop.getConnectionFor
         ? await withTimeout(
@@ -785,7 +811,7 @@ async function openSecondary(entry: Secondary, spawnPriority: SpawnPriority = 'b
               profile: entry.profile,
               ...dialPriority(spawnPriority)
             }),
-            RECONNECT_ATTEMPT_TIMEOUT_MS,
+            SOURCE_SWITCH_DIAL_TIMEOUT_MS,
             `Timed out connecting to profile "${entry.profile}"`
           )
         : await withTimeout(
@@ -1122,11 +1148,9 @@ function createSecondary(profile: string, connectionId: null | string = null): S
 
       entry.openedAt = null
 
-      // A dead socket cannot emit the terminal event that normally releases
-      // its turn lease. Drop the orphaned lease before deciding whether this
-      // route is still retained/active enough to reconnect.
-      releaseTurnLeasesForScope(scope)
-
+      // A transport drop does not settle a running turn. Its lease must keep
+      // the route alive so reconnect can replay missed events and receive the
+      // terminal event. Actual disposal releases orphaned leases below.
       if (entry.wantOpen) {
         scheduleReconnect(entry)
       }
@@ -1339,12 +1363,18 @@ export async function requestGatewayForAgent<T>(
   // Require both owner identities to agree before collapsing the route; a
   // different source or profile must retain its isolated secondary.
   if (isPrimaryRegistryRoute(connectionId, key)) {
+    traceAgentRoute(scope, 'primary')
+
     return requestGatewayForProfile<T>(key, method, params, timeoutMs, signal, { spawnPriority })
   }
 
   if (await ridesPrimaryBackend(connectionId, key, spawnPriority)) {
+    traceAgentRoute(scope, 'primary-shared')
+
     return requestOnPrimaryGateway<T>(method, { ...params, profile: key }, timeoutMs, signal)
   }
+
+  traceAgentRoute(scope, 'secondary')
 
   if (!window.hermesDesktop?.getConnectionFor) {
     throw new Error('This Desktop build cannot dial registry connections. Update Hermes Desktop.')
@@ -2304,13 +2334,21 @@ export function parkSecondariesForRetiredBackend(poolKey: string): string[] {
 // Tear a secondary down: stop its reconnect loop, detach listeners, close the
 // socket. Caller handles removal from the map.
 function disposeSecondary(entry: Secondary): void {
+  if (!entry.wantOpen) {
+    return
+  }
+
   entry.wantOpen = false
+  entry.pendingConnectionRedial = false
   clearTimer(entry)
   clearSecondaryLivenessReprobe(entry)
   entry.offEvent()
   entry.offRequest()
   entry.offState()
   entry.gateway.close()
+  // Release can re-enter disposal at refcount zero. wantOpen is already false,
+  // and listeners are detached, so explicit teardown never rearms reconnect.
+  releaseTurnLeasesForScope(entry.scope)
 }
 
 // Invariant restore for every eviction path: if the active key names a

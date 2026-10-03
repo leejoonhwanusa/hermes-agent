@@ -89,15 +89,20 @@ def consume_ticket(ticket: str, *, scope=None) -> Dict[str, Any]:
     from .registry import get_provider
     current = get_provider(info["provider"])
     if binding is not None:
-        _verify_binding(*binding)
-        if scope is not None:
-            scope[_WS_SESSION_SCOPE_KEY] = binding
-            arm_watch = scope.get("_hermes_ws_session_watch")
-            if arm_watch is not None:
-                arm_watch()
+        bind_ws_session(binding, scope=scope)
     elif current is not None and current.bind_ws_ticket_session:
         raise TicketInvalid("session binding missing")
     return info
+
+
+def bind_ws_session(binding, *, scope=None) -> None:
+    """Keep ticket and native bearer connections under the same session authority."""
+    _verify_binding(*binding)
+    if scope is not None:
+        scope[_WS_SESSION_SCOPE_KEY] = binding
+        arm_watch = scope.get("_hermes_ws_session_watch")
+        if arm_watch is not None:
+            arm_watch()
 
 
 def wrap_asgi_with_ws_sessions(app):

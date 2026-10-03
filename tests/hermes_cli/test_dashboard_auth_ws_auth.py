@@ -11,6 +11,7 @@ through the production ASGI composition and real Basic login/logout routes.
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +27,7 @@ from hermes_cli.dashboard_auth.ws_tickets import (
     internal_ws_credential,
     mint_ticket,
 )
-from tests.hermes_cli.conftest_dashboard_auth import StubAuthProvider
+from tests.hermes_cli.conftest_dashboard_auth import StubAuthProvider, _sign
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +181,28 @@ def test_basic_logout_closes_idle_socket_and_preserves_other_login(gated_app, mo
             with other.websocket_connect(f"wss://fly-app.fly.dev/api/pub?channel=keep&ticket={publish_ticket}") as publisher:
                 publisher.send_text("still connected")
                 assert alive.receive_text() == "still connected"
+
+
+def test_basic_bearer_logout_revokes_derived_display_ticket(gated_app):
+    import plugins.dashboard_auth.basic as basic
+    from hermes_cli.dashboard_auth.ws_tickets import TicketInvalid, consume_ticket
+
+    clear_providers()
+    provider = basic.BasicAuthProvider(
+        username="admin", password_hash=basic.hash_password("hunter2"),
+        secret=b"test-bearer-revocation-secret!!!")
+    register_provider(provider)
+    session = provider.complete_password_login(username="admin", password="hunter2")
+    other = provider.complete_password_login(username="admin", password="hunter2")
+    ws = _fake_ws(query={"token": session.access_token}, path="/api/ws")
+    ws.scope = {}
+    assert _web_server_chat._ws_auth_reason(ws) == (None, "token")
+    parent = ws.scope["_hermes_ws_session_binding"]
+    derived = mint_ticket(user_id=session.user_id, provider="bot-desktop", session_binding=parent)
+    provider.logout_session(access_token=session.access_token, refresh_token="")
+    with pytest.raises(TicketInvalid, match="revoked or changed"):
+        consume_ticket(derived)
+    assert provider.verify_session(access_token=other.access_token) is not None
 
 
 class TestWsTicketEndpoint:
@@ -338,6 +361,80 @@ class TestWsAuthOkGated:
         _SESSION_TOKEN (e.g. a leaked log line)."""
         ws = _fake_ws(query={"token": web_server._SESSION_TOKEN})
         assert _web_server_chat._ws_auth_ok(ws) is False
+
+    def test_session_token_accepted_in_gated_mode(self, gated_app):
+        """A provider-verified session access token (?token=) is accepted in
+        gated mode — the credential a token-mode Remote desktop connection
+        bakes into its WS URL. Reuses the same verify_session provider seam
+        as the native bearer REST leg (#106685)."""
+        access_token = _sign({
+            "sub": "remote-desktop-user",
+            "email": "user@example.test",
+            "name": "Remote User",
+            "org_id": "org-1",
+            "exp": int(time.time()) + 3600,
+        })
+        ws = _fake_ws(query={"token": access_token}, path="/api/ws")
+        assert _web_server_chat._ws_auth_ok(ws) is True
+        assert ws._hermes_auth_identity == {
+            "user_id": "remote-desktop-user",
+            "provider": "stub",
+        }
+
+    def test_invalid_session_token_rejected_in_gated_mode(self, gated_app):
+        """A bogus ?token= fails with token_invalid (and audits), not a crash."""
+        ws = _fake_ws(query={"token": "bogus-token"}, path="/api/ws")
+        reason, cred = _web_server_chat._ws_auth_reason(ws)
+        assert reason == "token_invalid"
+        assert cred == "token"
+        assert _web_server_chat._ws_auth_ok(ws) is False
+
+    def test_expired_session_token_rejected_in_gated_mode(self, gated_app):
+        """A well-formed but expired session token is rejected: the provider
+        verify seam honours exp, so a leaked stale token grants nothing."""
+        access_token = _sign({
+            "sub": "remote-desktop-user",
+            "email": "user@example.test",
+            "name": "Remote User",
+            "org_id": "org-1",
+            "exp": int(time.time()) - 3600,
+        })
+        ws = _fake_ws(query={"token": access_token}, path="/api/ws")
+        assert _web_server_chat._ws_auth_ok(ws) is False
+
+    def test_display_ticket_still_rejected_as_gateway_login(self, gated_app):
+        """The token leg must not disturb the bot-desktop display-ticket
+        guard: a display ticket presented as a gateway login stays invalid."""
+        ticket = mint_ticket(user_id="bot-user", provider="bot-desktop")
+        ws = _fake_ws(query={"ticket": ticket}, path="/api/ws")
+        assert _web_server_chat._ws_auth_ok(ws) is False
+
+    def test_session_token_audit_logs(self, gated_app, tmp_path, monkeypatch):
+        """Accept and reject of a session token both audit."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from hermes_cli.dashboard_auth import audit as audit_mod
+
+        if hasattr(audit_mod, "_LOGGER"):
+            monkeypatch.setattr(audit_mod, "_LOGGER", None, raising=False)
+
+        access_token = _sign({
+            "sub": "remote-desktop-user",
+            "email": "user@example.test",
+            "name": "Remote User",
+            "org_id": "org-1",
+            "exp": int(time.time()) + 3600,
+        })
+        ws_ok = _fake_ws(query={"token": access_token}, path="/api/ws")
+        assert _web_server_chat._ws_auth_ok(ws_ok) is True
+
+        ws_bad = _fake_ws(query={"token": "bogus-token"}, path="/api/ws")
+        assert _web_server_chat._ws_auth_ok(ws_bad) is False
+
+        log_file = tmp_path / "logs" / "dashboard-auth.log"
+        if log_file.exists():
+            content = log_file.read_text()
+            assert "token_auth_success" in content
+            assert "token_auth_failure" in content
 
     def test_rejection_audit_logs(self, gated_app, tmp_path, monkeypatch):
         # Point the audit log at a tmp dir so we can read what got written.
