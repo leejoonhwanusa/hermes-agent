@@ -347,8 +347,8 @@ def test_retirement_refuses_to_downgrade_newer_source(
         source, monkeypatch, retired_channel_archive, transport):
     git(source.root, "checkout", "--detach", source.commits[2])
     if transport == "shallow":
-        import shutil
-        shutil.rmtree(source.root)
+        from pm.filesystem import remove_tree
+        remove_tree(source.root)
         git(source.root.parent, "clone", "--depth=1", source.origin.as_uri(), str(source.root))
     if transport == "zip":
         (source.root / "pyproject.toml").write_text('[project]\nversion = "1.2.2"\n')
