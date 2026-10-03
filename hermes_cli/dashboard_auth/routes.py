@@ -423,7 +423,8 @@ async def auth_logout(request: Request):
     at, rt = read_session_cookies(request)
     for provider in list_providers() if (at or rt) else ():
         try:
-            provider.logout_session(access_token=at or '', refresh_token=rt or '')
+            await run_in_threadpool(
+                provider.logout_session, access_token=at or '', refresh_token=rt or '')
         except Exception:  # Durable revocation must not silently report success.
             raise _http(503, 'Session revocation unavailable; retry logout') from None
     sess = getattr(request.state, "session", None)

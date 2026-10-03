@@ -168,6 +168,41 @@ def gated_app(pw_provider):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
+async def test_logout_keeps_other_requests_responsive(gated_app, pw_provider, monkeypatch):
+    import asyncio
+    import threading
+
+    from httpx import ASGITransport, AsyncClient
+
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def slow_logout(*, access_token, refresh_token):
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise ProviderError('revocation did not finish')
+
+    monkeypatch.setattr(pw_provider, 'logout_session', slow_logout)
+    async with AsyncClient(transport=ASGITransport(app=web_server.app),
+                           base_url='https://fly-app.fly.dev') as client:
+        login = await client.post('/auth/password-login', json={
+            'provider': 'testpw', 'username': 'admin', 'password': 'hunter2'})
+        assert login.status_code == 200
+        logout = asyncio.create_task(client.post('/auth/logout', follow_redirects=False))
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            providers = await asyncio.wait_for(client.get('/api/auth/providers'), 10)
+            assert providers.status_code == 200
+            assert not logout.done()
+        finally:
+            release.set()
+            response = await asyncio.wait_for(logout, 10)
+        assert response.status_code == 302
+        assert 'Max-Age=0' in response.headers['set-cookie']
+
+
 @pytest.mark.parametrize('failure', [False, True])
 def test_basic_logout_replay_and_write_failure(gated_app, monkeypatch, failure):
     import plugins.dashboard_auth.basic as basic
