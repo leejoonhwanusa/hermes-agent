@@ -19,19 +19,19 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Focused rerun of the two official integration files corrected for Windows test-fixture drift; prior successful policy, completion, pipe and auth checks remain historical evidence.
+    description: Passive update comparison follows installation in-place policy while preserving explicit branches, channels, worktree ownership and no-lazy-fetch behavior.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/gateway/test_gateway_shutdown.py tests/hermes_cli/test_source_launcher_publication.py -- -v --tb=short"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/hermes_cli/test_source_check.py tests/hermes_cli/test_source_channel_integration.py tests/hermes_cli/test_git_probe_no_lazy_fetch.py -- -v --tb=short"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for the two corrected Windows test-fixture files; production and other affected paths already passed.
+    description: Scoped Ruff for the passive update checker and its affected existing tests.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
-    command_argv: [check, tests/gateway/test_gateway_shutdown.py, tests/hermes_cli/test_source_launcher_publication.py]
+    command_argv: [check, hermes_cli/source_check.py, tests/hermes_cli/test_source_check.py, tests/hermes_cli/test_source_channel_integration.py, tests/hermes_cli/test_git_probe_no_lazy_fetch.py]
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

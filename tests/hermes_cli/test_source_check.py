@@ -199,6 +199,40 @@ def test_cache_force_expiry_and_passive_opt_out(installation, monkeypatch):
     assert requests.count(url) == requests.count(MAIN_CHANNEL) == 5
 
 
+def test_named_profile_cache_tracks_installation_update_in_place_policy(installation, monkeypatch):
+    import os
+
+    from hermes_cli.source_check import check_for_updates
+
+    root, linked, home, base, head, responses, requests, git = installation
+    (home / "config.yaml").write_text("{}\n")
+    named_home = home / "profiles" / "dashboard"
+    named_home.mkdir(parents=True)
+    (named_home / "config.yaml").write_text("{}\n")
+    process_home = home.parent / "other-install"
+    process_home.mkdir()
+    process_config = process_home / "config.yaml"
+    process_config.write_text("updates: {parked_branch_strategy: update_in_place}\n")
+    monkeypatch.setenv("HERMES_HOME", str(process_home))
+    cache = named_home / "cache.json"
+    target = "a" * 40
+    responses["/repos/fixture/fork/commits/feature%2Fgui"] = (200, head)
+    responses["/repos/fixture/fork/commits/main"] = (200, target)
+    responses[f"/repos/fixture/fork/compare/{head}...{target}"] = (200, {"ahead_by": 3, "commits": []})
+
+    assert check_for_updates(install_root=linked, home=named_home, cache_path=cache)["branch"] == "feature/gui"
+    (home / "config.yaml").write_text("updates: {parked_branch_strategy: update_in_place}\n")
+    process_config.write_text("updates: {parked_branch_strategy: switch}\n")
+    status = check_for_updates(install_root=linked, home=named_home, cache_path=cache)
+    assert status["branch"] == "main", status
+    assert status["currentBranch"] == "feature/gui"
+    assert status["behind"] == 3
+    assert git("branch", "--show-current", cwd=linked) == "feature/gui"
+    assert git("rev-parse", "HEAD", cwd=linked) == head
+    assert os.environ["HERMES_HOME"] == str(process_home)
+    assert process_config.read_text() == "updates: {parked_branch_strategy: switch}\n"
+
+
 def test_explicit_and_current_branch_heal_only_after_confirmed_absence(installation, monkeypatch):
     from hermes_cli.source_check import check_for_updates
     root, linked, home, base, head, responses, requests, git = installation

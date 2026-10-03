@@ -375,7 +375,7 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
                       cache_path: Path | None = None, branch_config_path: Path | None = None,
                       force: bool = False,
                       passive: bool = False, git: str = "git") -> dict:
-    """Return a presentation-ready status. Omitted branch follows the current checkout.
+    """Return status for the current checkout or its installation's in-place main target.
 
     Only the default (running installation) may use HERMES_REVISION. An explicit
     target must never inherit the host process's embedded revision or stamp.
@@ -400,14 +400,23 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
     co = _read_checkout(root, git, embedded)
     desktop_config = _read_json(branch_config_path) if branch_config_path else None
     configured_branch = _configured_branch(desktop_config)
-    selected_branch = branch or configured_branch or _checked_out_branch(co.current_branch, "main")
+    follow_main = False
+    if branch is None and configured_branch is None and channel == "main" and not co.embedded:
+        from hermes_constants import get_default_hermes_root
+
+        install_config = require_readable_config_before_write(get_default_hermes_root(home=home) / "config.yaml")
+        updates = install_config.get("updates") or {}
+        follow_main = isinstance(updates, dict) and updates.get("parked_branch_strategy") == "update_in_place"
+    comparison_branch = None if follow_main else co.current_branch
+    selected_branch = branch or configured_branch or _checked_out_branch(comparison_branch, "main")
     result.update(supported=True, currentSha=co.head, currentBranch=co.current_branch, dirty=co.dirty)
     if channel != "main":
         result["channel"] = channel
     else:
         result["branch"] = selected_branch
     identity = {"root": str(root), "home": str(home), "head": co.head, "origin": co.origin, "branch": selected_branch,
-                "channel": channel, "embedded": embedded, "branchOverride": branch is not None, "channelProtocol": 1}
+                "channel": channel, "embedded": embedded, "branchOverride": branch is not None,
+                "inPlaceMain": follow_main, "channelProtocol": 1}
     cache_file = Path(cache_path) if cache_path is not None else home / "source-checks" / f"{install_id(root)}.json"
     now = time.time()
     cached = None if force else _cached_status(cache_file, identity, now)
@@ -420,8 +429,8 @@ def check_for_updates(*, install_root: Path | None = None, home: Path | None = N
     elif branch is None:
         source_target = _resolve_channel(result, channel, co)
         if source_target is not None and not source_target.commit:
-            # The record supplies a default, not permission to leave the user's branch.
-            selected_branch = configured_branch or _checked_out_branch(co.current_branch, source_target.branch)
+            # Compare the installation's update target without changing its checkout.
+            selected_branch = configured_branch or _checked_out_branch(comparison_branch, source_target.branch)
     if "error" not in result and (source_target is None or source_target.branch is not None):
         # Only a Desktop-configured branch the caller did not override is healed.
         heal = branch_config_path and not branch and configured_branch == selected_branch
