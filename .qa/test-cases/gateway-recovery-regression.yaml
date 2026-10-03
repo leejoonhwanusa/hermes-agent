@@ -1,7 +1,7 @@
 test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION
 project_id: hermes-agent
 title: Installed Agent official update and Windows recovery regression
-purpose: Verify official source integration, install-global update policy, source completion and Windows pause/recovery through the pinned runner; no live Task or Gateway mutation.
+purpose: Verify official update session and maintenance leases, compression commit fencing, profile-scoped startup, Windows Gateway/update policy, source checks and unreachable cron retries through the pinned runner; exclude live Task creation and do not mutate the live Gateway.
 preconditions:
   - Use the registered contract and its pinned existing PM test generation.
   - Keep the unrelated untracked web build folder intact.
@@ -15,9 +15,9 @@ tags: [regression, gateway, windows, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 4
+revision: 5
 created_at: '2026-09-28T10:32:41+00:00'
-updated_at: '2026-10-03T09:25:00+00:00'
+updated_at: '2026-10-03T12:44:00+00:00'
 automation_bindings:
   - binding_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION-PROFILE
     test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION

@@ -1,7 +1,7 @@
 test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF
 project_id: hermes-agent
 title: Installed Agent Gateway recovery scoped Ruff
-purpose: Check style for the profile reconciliation and control pipe source and the selected profile and Windows pipe tests without live service actions.
+purpose: Check style for the official update's affected state, compression, startup, Windows Gateway/update and cron source boundaries plus the eighteen selected regression files without live service actions.
 preconditions:
   - Use the registered contract and its pinned existing PM test generation.
 steps:
@@ -14,9 +14,9 @@ tags: [regression, static, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 3
+revision: 4
 created_at: '2026-09-28T10:32:41+00:00'
-updated_at: '2026-09-29T19:58:11.039806+00:00'
+updated_at: '2026-10-03T12:44:00+00:00'
 automation_bindings:
   - binding_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF-PROFILE
     test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-RUFF

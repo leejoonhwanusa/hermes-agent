@@ -4,7 +4,7 @@ title: Independent review of installed Agent dashboard authentication and runtim
 purpose: Review dashboard-auth source evidence or authorized runtime-adoption and access evidence while keeping those claims distinct.
 preconditions:
   - Freeze a source-bound subject and independent_code_review plan before a source review, or a runtime-bound subject and plan before a runtime review.
-  - Use a real fresh read-only named qa agent with observed gpt-6-astra/high provenance, separate from the implementer.
+  - Use a real fresh read-only named qa agent with observed gpt-6-astra/medium provenance, separate from the implementer.
 steps:
   - For a source review, inspect the exact source diff and source-regression Evidence against the source plan.
   - For a runtime review, inspect the selected runtime-access case's current plan and timestamped source/path, task/process, endpoint, authentication, and applied-route observations against that runtime plan.
@@ -17,6 +17,6 @@ tags: [independent_code_review, runtime_acceptance, auth, websocket, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 2
+revision: 3
 created_at: '2026-09-29T09:02:44+00:00'
-updated_at: '2026-09-29T09:30:08+00:00'
+updated_at: '2026-10-03T12:44:00+00:00'

@@ -4,7 +4,7 @@ title: Independent review of installed Agent Gateway recovery
 purpose: Review the recovery source, affected checks, and dated operating evidence; distinguish them from natural watchdog and external-message proof.
 preconditions:
   - Freeze a source-bound subject and independent_code_review plan before dispatch.
-  - Use a real fresh read-only named qa agent with observed gpt-6-astra/high provenance, separate from the implementer.
+  - Use a real fresh read-only named qa agent with observed gpt-6-astra/medium provenance, separate from the implementer.
 steps:
   - Review the exact committed diff and central regression Evidence.
   - Submit the unmodified ReviewObservation through the existing manual adapter.
@@ -16,6 +16,6 @@ tags: [independent_code_review, gateway, lifecycle, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 1
+revision: 2
 created_at: '2026-09-28T10:32:41+00:00'
-updated_at: '2026-09-28T10:32:41+00:00'
+updated_at: '2026-10-03T12:44:00+00:00'
