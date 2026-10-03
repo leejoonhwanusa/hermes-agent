@@ -19,52 +19,26 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Official update regression for session and maintenance leases, compression commit fencing, profile-scoped startup, Windows Gateway/update policy, source checks and unreachable cron retries; no live Task creation.
+    description: Focused recovery for the three failed official-update files, one shared completion fixture success case and the existing Windows Restart Manager boundary; no live Task creation.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/hermes_state/test_session_turn_lease.py tests/hermes_state/test_startup_maintenance_lease.py tests/hermes_state/test_state_db_second_process_maintenance.py tests/hermes_state/test_compression_lease_refresh_before_publish.py tests/hermes_state/test_compression_lineage_guard.py tests/hermes_state/test_compression_watermark_commit.py tests/hermes_state/test_lease_pid_namespace.py tests/agent/test_compression_commit_fence_race.py tests/gateway/test_startup_launch_profile_hooks_scope.py tests/gateway/test_startup_warmup_profile_scope.py tests/gateway/test_launch_profile_scope_fallback.py tests/gateway/test_platform_registry.py tests/hermes_cli/test_gateway_windows.py tests/hermes_cli/test_gateway_restart_external_supervisor.py tests/hermes_cli/test_update_no_gateway_restart.py tests/hermes_cli/test_update_parked_branch_guard.py tests/hermes_cli/test_source_check.py tests/cron/test_unreachable_retry.py -- -v --tb=short -k 'not test_exec_schtasks_round_trips_non_ascii_task_argument_live'"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/hermes_cli/test_update_no_gateway_restart.py tests/hermes_state/test_lease_pid_namespace.py tests/hermes_state/test_state_db_second_process_maintenance.py tests/hermes_cli/test_update_completion_process.py tests/hermes_state/test_state_db_holders.py -- -v --tb=short -k 'test_update_no_gateway_restart or test_lease_pid_namespace or test_state_db_second_process_maintenance or (test_old_process_new_git_tree_completes_in_fresh_python and None) or test_windows_restart_manager_scan_sizes_then_excludes_self'"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for the official update's affected state, compression, startup, Windows Gateway/update and cron source boundaries plus the eighteen selected regression files.
+    description: Scoped Ruff for the Windows canonical resource-path repair, the two fixture adaptations and their existing affected regression files.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
     command_argv:
       - check
-      - hermes_state_common.py
-      - hermes_state_compression.py
-      - hermes_state_gateway.py
-      - hermes_state_maintenance.py
-      - hermes_state_pidns.py
-      - hermes_state_sessions.py
-      - hermes_state_portability.py
-      - agent/conversation_compression.py
-      - gateway/run_adapters.py
-      - gateway/run_startup.py
-      - gateway/platform_registry.py
-      - hermes_cli/gateway.py
-      - hermes_cli/web_server_chat.py
-      - cron/unreachable_retry.py
-      - tests/hermes_state/test_session_turn_lease.py
-      - tests/hermes_state/test_startup_maintenance_lease.py
-      - tests/hermes_state/test_state_db_second_process_maintenance.py
-      - tests/hermes_state/test_compression_lease_refresh_before_publish.py
-      - tests/hermes_state/test_compression_lineage_guard.py
-      - tests/hermes_state/test_compression_watermark_commit.py
+      - hermes_state_holders.py
+      - tests/hermes_cli/test_update_completion_process.py
       - tests/hermes_state/test_lease_pid_namespace.py
-      - tests/agent/test_compression_commit_fence_race.py
-      - tests/gateway/test_startup_launch_profile_hooks_scope.py
-      - tests/gateway/test_startup_warmup_profile_scope.py
-      - tests/gateway/test_launch_profile_scope_fallback.py
-      - tests/gateway/test_platform_registry.py
-      - tests/hermes_cli/test_gateway_windows.py
-      - tests/hermes_cli/test_gateway_restart_external_supervisor.py
       - tests/hermes_cli/test_update_no_gateway_restart.py
-      - tests/hermes_cli/test_update_parked_branch_guard.py
-      - tests/hermes_cli/test_source_check.py
-      - tests/cron/test_unreachable_retry.py
+      - tests/hermes_state/test_state_db_second_process_maintenance.py
+      - tests/hermes_state/test_state_db_holders.py
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

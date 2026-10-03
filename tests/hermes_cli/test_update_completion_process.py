@@ -81,7 +81,10 @@ def transition(tmp_path):
         "    return Path(os.environ['HERMES_HOME'])\n"
     )
     (package / "venv_sync.py").write_text(
+        "from contextlib import nullcontext\n"
+        "from types import SimpleNamespace\n"
         "from hermes_cli.probe import event\n"
+        "source_completion_scope = lambda root: nullcontext(SimpleNamespace(dependencies_changed=False))\n"
         "publish_launchers = lambda root: event('launchers')\n"
         "collect_superseded_generations = lambda root: event('collect')\n"
         "refuse_foreign_owned_venv = lambda root: None\n"
