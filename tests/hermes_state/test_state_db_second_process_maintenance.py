@@ -74,12 +74,16 @@ def test_holder_scan_sees_through_a_symlinked_home(tmp_path):
     sqlite3.connect(db).execute("CREATE TABLE t(x)").connection.close()
     holder = subprocess.Popen(
         [sys.executable, "-c",
-         f"import sqlite3, sys, time; c = sqlite3.connect({str(db)!r}); c.execute('BEGIN IMMEDIATE'); "
-         "print('held', flush=True); time.sleep(30)"],
-        stdout=subprocess.PIPE, text=True)
+         f"import os, sqlite3, sys; c = sqlite3.connect({str(db)!r}); c.execute('BEGIN IMMEDIATE'); "
+         "print(f'held:{os.getpid()}', flush=True); sys.stdin.read(1); c.close()"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
-        assert holder.stdout.readline().strip() == "held"
-        assert any(pid == holder.pid for pid, _ in foreign_state_db_holders(alias / "state.db"))
+        prefix, separator, pid_text = holder.stdout.readline().strip().partition(":")
+        assert prefix == "held" and separator == ":" and pid_text.isdecimal()
+        holder_pid = int(pid_text)
+        assert holder_pid > 0
+        assert any(pid == holder_pid for pid, _ in foreign_state_db_holders(alias / "state.db"))
     finally:
-        holder.kill()
-        holder.wait()
+        holder.stdin.write("x")
+        holder.stdin.close()
+        holder.wait(timeout=10)

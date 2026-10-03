@@ -384,7 +384,7 @@ def _windows_restart_manager_holders(db_path: Path) -> List[Tuple[int, str]]:
         api.RmStartSession, api.RmRegisterResources, api.RmGetList, api.RmEndSession
     )
 
-    db_abspath = os.path.realpath(os.fspath(db_path))
+    db_abspath = os.path.abspath(os.fspath(db_path))
     resources = [path for path in _sqlite_family(db_abspath) if os.path.exists(path)]
     if not resources:
         return []

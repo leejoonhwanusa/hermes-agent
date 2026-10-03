@@ -19,26 +19,23 @@ metadata:
   test_environment: PM-selected test generation pinned in the approved profiles; re-register on generation change.
 approved_profiles:
   gateway_recovery_regression:
-    description: Focused recovery for the three failed official-update files, one shared completion fixture success case and the existing Windows Restart Manager boundary; no live Task creation.
+    description: Focused recovery for the two completion cases and symlink-holder fixture; no live Task creation.
     interpreter: C:/Program Files/Git/usr/bin/bash.exe
     command_argv:
       - -c
-      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/hermes_cli/test_update_no_gateway_restart.py tests/hermes_state/test_lease_pid_namespace.py tests/hermes_state/test_state_db_second_process_maintenance.py tests/hermes_cli/test_update_completion_process.py tests/hermes_state/test_state_db_holders.py -- -v --tb=short -k 'test_update_no_gateway_restart or test_lease_pid_namespace or test_state_db_second_process_maintenance or (test_old_process_new_git_tree_completes_in_fresh_python and None) or test_windows_restart_manager_scan_sizes_then_excludes_self'"
+      - "HERMES_PYTHON=/c/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/python.exe exec /usr/bin/bash scripts/run_tests.sh -j 1 --file-retries 0 tests/hermes_cli/test_update_completion_process.py tests/hermes_cli/test_update_no_gateway_restart.py tests/hermes_state/test_state_db_second_process_maintenance.py -- -v --tb=short -k '(test_old_process_new_git_tree_completes_in_fresh_python and None) or test_restart_deferral_crosses_real_completion_process or test_holder_scan_sees_through_a_symlinked_home'"
     working_directory: .
     timeout_seconds: 1800
     execution_authority: read_only
     driver: process
   gateway_recovery_ruff:
-    description: Scoped Ruff for the Windows canonical resource-path repair, the two fixture adaptations and their existing affected regression files.
+    description: Scoped Ruff for the two corrected fixtures and the existing shared-fixture restart-deferral test.
     interpreter: C:/Users/HANILSERVER/AppData/Local/hermes/installs/a8225d1dcfe5b2aa/test-environment/gen-ea37ef5c6269424c91d014c7d00313dd/venv/Scripts/ruff.exe
     command_argv:
       - check
-      - hermes_state_holders.py
       - tests/hermes_cli/test_update_completion_process.py
-      - tests/hermes_state/test_lease_pid_namespace.py
       - tests/hermes_cli/test_update_no_gateway_restart.py
       - tests/hermes_state/test_state_db_second_process_maintenance.py
-      - tests/hermes_state/test_state_db_holders.py
     working_directory: .
     timeout_seconds: 300
     execution_authority: read_only

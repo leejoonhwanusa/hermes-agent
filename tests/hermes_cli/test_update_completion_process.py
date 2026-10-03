@@ -55,6 +55,8 @@ def transition(tmp_path):
     )
     (package / "probe.py").write_text(
         "import json, os, pathlib, sys\n"
+        "sys.stdout.reconfigure(encoding='utf-8')\n"
+        "sys.stderr.reconfigure(encoding='utf-8')\n"
         "def event(name, **values):\n"
         "    with pathlib.Path('events.jsonl').open('a') as f:\n"
         "        f.write(json.dumps(dict(name=name, pid=os.getpid(), python=sys.executable, **values)) + '\\n')\n"
@@ -209,7 +211,7 @@ def test_old_process_new_git_tree_completes_in_fresh_python(transition, tmp_path
     result = subprocess.run(
         [sys.executable, "-c", driver, update_completion.__file__, new, json.dumps(request)],
         cwd=root, env={**os.environ, "PYTHONPATH": str(root), "HERMES_HOME": request["home"]},
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     response = json.loads(result.stdout.split("RESULT=")[1])
