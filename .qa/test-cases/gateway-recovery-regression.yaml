@@ -1,7 +1,7 @@
 test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION
 project_id: hermes-agent
-title: Installed Agent Gateway profile and Windows pipe regression
-purpose: Verify Gateway profile ownership and bounded Windows control-pipe I/O through the pinned source test runner without modifying the live Scheduled Task or Gateway.
+title: Installed Agent official update and Windows recovery regression
+purpose: Verify official source integration, install-global update policy, source completion and Windows pause/recovery through the pinned runner; no live Task or Gateway mutation.
 preconditions:
   - Use the registered contract and its pinned existing PM test generation.
   - Keep the unrelated untracked web build folder intact.
@@ -15,9 +15,9 @@ tags: [regression, gateway, windows, read-only]
 platforms: [windows]
 owner: qa
 lifecycle: active
-revision: 3
+revision: 4
 created_at: '2026-09-28T10:32:41+00:00'
-updated_at: '2026-09-29T19:58:11.038281+00:00'
+updated_at: '2026-10-03T09:25:00+00:00'
 automation_bindings:
   - binding_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION-PROFILE
     test_case_id: HQ-HERMES-AGENT-GATEWAY-RECOVERY-REGRESSION

@@ -164,7 +164,16 @@ def _m():
 def _updates_config() -> dict:
     """The ``updates:`` config section (``{}`` when absent/malformed); may raise on config errors."""
     from hermes_cli.config import load_config
-    section = (load_config() or {}).get("updates", {})
+    from hermes_constants import (
+        get_default_hermes_root as _get_default_hermes_root,
+        reset_hermes_home_override, set_hermes_home_override,
+    )
+
+    token = set_hermes_home_override(_get_default_hermes_root())
+    try:
+        section = (load_config() or {}).get("updates", {})
+    finally:
+        reset_hermes_home_override(token)
     return section if isinstance(section, dict) else {}
 
 

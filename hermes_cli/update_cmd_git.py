@@ -182,8 +182,8 @@ def _assess_parked_branch_switch(
     A config read failure must not disable the safety checks: fall through with the default."""
     from hermes_cli.update_cmd_git import _git_run
     try:
-        from hermes_cli.config import load_config
-        _update_cfg = (load_config() or {}).get("updates", {})
+        from hermes_cli.update_cmd import _updates_config
+        _update_cfg = _updates_config()
         if isinstance(_update_cfg, dict) and not bool(_update_cfg.get("auto_switch_parked_branch", True)):
             return False, "disabled"
     except Exception as exc:

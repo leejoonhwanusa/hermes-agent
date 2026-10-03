@@ -25,13 +25,57 @@ from types import SimpleNamespace
 
 import pytest
 
+
 from hermes_cli import main as hermes_main
 import hermes_cli.main_web_build as main_web_build
 import hermes_cli.main_install_repair as main_install_repair
 from hermes_cli import update_cmd
+from hermes_cli.config import load_config
 
 
 GIT = ["git"]
+
+
+def test_install_update_policy_is_shared_without_changing_profile_config(
+    repo_pair, tmp_path, monkeypatch,
+):
+    import hermes_cli.config as hermes_config
+    from hermes_cli.update_cmd_maint import _load_updates_cfg
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    monkeypatch.setattr(hermes_config, "load_config", load_config)
+    root = tmp_path / "hermes"
+    root.mkdir()
+    (root / "config.yaml").write_text(
+        "updates:\n  parked_branch_strategy: update_in_place\n"
+        "  auto_switch_parked_branch: true\n  pre_update_backup: false\n  backup_keep: 9\n",
+        encoding="utf-8")
+    homes = []
+    for name in ("profile-a", "hermes-dashboard"):
+        home = root / "profiles" / name
+        home.mkdir(parents=True)
+        (home / "config.yaml").write_text(
+            "updates:\n  parked_branch_strategy: switch\n"
+            "  auto_switch_parked_branch: false\n  pre_update_backup: true\n  backup_keep: 1\n",
+            encoding="utf-8")
+        homes.append(home)
+    monkeypatch.setenv("HERMES_HOME", str(root))
+    repo = repo_pair
+    for home in (homes[0], homes[1], homes[0]):
+        token = set_hermes_home_override(home)
+        try:
+            assert load_config()["updates"]["parked_branch_strategy"] == "switch"
+            updates = update_cmd._updates_config()
+            assert updates["parked_branch_strategy"] == "update_in_place"
+            assert updates["pre_update_backup"] is False and updates["backup_keep"] == 9
+            assert _load_updates_cfg() == updates
+            safe, _ = update_cmd._assess_parked_branch_switch(
+                ["git"], repo, "old-feature", "main", in_place=True)
+            assert safe
+            assert load_config()["updates"]["parked_branch_strategy"] == "switch"
+            assert load_config()["updates"]["pre_update_backup"] is True
+        finally:
+            reset_hermes_home_override(token)
 
 
 def _git(cwd, *args, check=True):

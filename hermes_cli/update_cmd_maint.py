@@ -56,10 +56,8 @@ def _sqlite_partial_completion_lines(sqlite_version: str) -> list[str]:
 
 def _load_updates_cfg() -> dict:
     """``updates`` section of config.yaml; ``{}`` on any failure."""
-    from hermes_cli.config import load_config
-    cfg = load_config() or {}
-    updates = cfg.get("updates", {}) if isinstance(cfg, dict) else {}
-    return updates if isinstance(updates, dict) else {}
+    from hermes_cli.update_cmd import _updates_config
+    return _updates_config()
 
 
 def _purge_stale_hermes_modules() -> None:
